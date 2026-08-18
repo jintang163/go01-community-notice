@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · 社区通知公告系统</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="auth-page">
+<div class="auth-card">
+  <h1>社区通知公告系统</h1>
+  <p class="subtitle">管理员发布通知，居民查看已读 / 未读</p>
+  <form id="login-form" class="form">
+    <label class="field">
+      <span>用户名</span>
+      <input id="username" name="username" type="text" autocomplete="username" required>
+    </label>
+    <label class="field">
+      <span>口令</span>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+    </label>
+    <button type="submit" class="btn btn-primary">登录</button>
+    <p id="login-error" class="error" hidden></p>
+  </form>
+  <p class="hint">默认管理员：<code>admin / admin123</code></p>
+</div>
+<script src="/static/app.js"></script>
+<script>
+document.getElementById('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const err = document.getElementById('login-error');
+  err.hidden = true;
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value;
+  try {
+    const res = await api.login(username, password);
+    App.setToken(res.token);
+    App.setUser(res.user);
+    if (res.user.role === 'admin') {
+      location.href = '/admin';
+    } else {
+      location.href = '/resident';
+    }
+  } catch (ex) {
+    err.textContent = ex.message || '登录失败';
+    err.hidden = false;
+  }
+});
+</script>
+</body>
+</html>

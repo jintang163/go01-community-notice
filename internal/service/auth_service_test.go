@@ -1,0 +1,156 @@
+package service
+
+import (
+	"context"
+	"testing"
+
+	"go01-community-notice/internal/model"
+)
+
+func TestAuthLoginSuccess(t *testing.T) {
+	env := newTestEnv(t)
+	token, u, err := env.svc.Auth.Login(context.Background(), "admin", "admin123")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if token == "" {
+		t.Error("expected token")
+	}
+	if u.ID != env.admin.ID {
+		t.Errorf("user id mismatch: %s vs %s", u.ID, env.admin.ID)
+	}
+}
+
+func TestAuthLoginWrongPassword(t *testing.T) {
+	env := newTestEnv(t)
+	_, _, err := env.svc.Auth.Login(context.Background(), "admin", "wrong")
+	if !model.IsInvalidCredentials(err) {
+		t.Errorf("expected invalid credentials, got %v", err)
+	}
+}
+
+func TestAuthLoginUnknownUser(t *testing.T) {
+	env := newTestEnv(t)
+	_, _, err := env.svc.Auth.Login(context.Background(), "nobody", "x")
+	if !model.IsInvalidCredentials(err) {
+		t.Errorf("expected invalid credentials, got %v", err)
+	}
+}
+
+func TestAuthLoginEmpty(t *testing.T) {
+	env := newTestEnv(t)
+	_, _, err := env.svc.Auth.Login(context.Background(), "", "")
+	if !model.IsInvalidCredentials(err) {
+		t.Errorf("expected invalid credentials, got %v", err)
+	}
+}
+
+func TestAuthCreateUserByAdmin(t *testing.T) {
+	env := newTestEnv(t)
+	u, err := env.svc.Auth.CreateUser(context.Background(), model.UserInput{
+		Username: "newresident", Password: "pw1234", Role: model.RoleResident, DisplayName: "新居民",
+	}, env.admin)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if u.ID == "" {
+		t.Error("expected id")
+	}
+	// 新用户可登录。
+	if _, _, err := env.svc.Auth.Login(context.Background(), "newresident", "pw1234"); err != nil {
+		t.Fatalf("login new user: %v", err)
+	}
+}
+
+func TestAuthCreateUserForbidden(t *testing.T) {
+	env := newTestEnv(t)
+	_, err := env.svc.Auth.CreateUser(context.Background(), model.UserInput{
+		Username: "x", Password: "pw1234", Role: model.RoleResident,
+	}, env.resident)
+	if !model.IsForbidden(err) {
+		t.Errorf("expected forbidden, got %v", err)
+	}
+}
+
+func TestAuthCreateUserValidation(t *testing.T) {
+	env := newTestEnv(t)
+	cases := []model.UserInput{
+		{Username: "ab", Password: "pw1234", Role: model.RoleResident},         // 用户名过短
+		{Username: "goodname", Password: "123", Role: model.RoleResident},     // 口令过短
+		{Username: "goodname", Password: "pw1234", Role: "unknown"},           // 非法角色
+	}
+	for i, in := range cases {
+		if _, err := env.svc.Auth.CreateUser(context.Background(), in, env.admin); err == nil {
+			t.Errorf("case %d: expected validation error", i)
+		}
+	}
+}
+
+func TestAuthCreateUserDuplicate(t *testing.T) {
+	env := newTestEnv(t)
+	_, err := env.svc.Auth.CreateUser(context.Background(), model.UserInput{
+		Username: "admin", Password: "pw1234", Role: model.RoleAdmin,
+	}, env.admin)
+	if !model.IsAlreadyExists(err) {
+		t.Errorf("expected already exists, got %v", err)
+	}
+}
+
+func TestAuthDeleteUser(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	u, _ := env.svc.Auth.CreateUser(ctx, model.UserInput{Username: "todelete", Password: "pw1234", Role: model.RoleResident}, env.admin)
+	if err := env.svc.Auth.DeleteUser(ctx, u.ID, env.admin); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := env.store.GetUserByID(ctx, u.ID); !model.IsNotFound(err) {
+		t.Errorf("expected not found after delete, got %v", err)
+	}
+}
+
+func TestAuthDeleteUserCannotDeleteSelf(t *testing.T) {
+	env := newTestEnv(t)
+	if err := env.svc.Auth.DeleteUser(context.Background(), env.admin.ID, env.admin); !model.IsConflict(err) {
+		t.Errorf("expected conflict deleting self, got %v", err)
+	}
+}
+
+func TestAuthChangePassword(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	u, _ := env.svc.Auth.CreateUser(ctx, model.UserInput{Username: "changer", Password: "pw1234", Role: model.RoleResident}, env.admin)
+	if err := env.svc.Auth.ChangePassword(ctx, u.ID, "pw1234", "newpass123"); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+	// 旧口令不应再能登录。
+	if _, _, err := env.svc.Auth.Login(ctx, "changer", "pw1234"); err == nil {
+		t.Error("old password should no longer work")
+	}
+	// 新口令可登录。
+	if _, _, err := env.svc.Auth.Login(ctx, "changer", "newpass123"); err != nil {
+		t.Fatalf("login with new password: %v", err)
+	}
+}
+
+func TestAuthChangePasswordWrongOld(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	if err := env.svc.Auth.ChangePassword(ctx, env.admin.ID, "wrong", "newpass123"); !model.IsInvalidCredentials(err) {
+		t.Errorf("expected invalid credentials, got %v", err)
+	}
+}
+
+func TestAuthListUsers(t *testing.T) {
+	env := newTestEnv(t)
+	users, err := env.svc.Auth.ListUsers(context.Background(), env.admin)
+	if err != nil {
+		t.Fatalf("list users: %v", err)
+	}
+	if len(users) < 2 {
+		t.Errorf("expected >=2 users, got %d", len(users))
+	}
+	// 居民不可列用户。
+	if _, err := env.svc.Auth.ListUsers(context.Background(), env.resident); !model.IsForbidden(err) {
+		t.Errorf("expected forbidden, got %v", err)
+	}
+}

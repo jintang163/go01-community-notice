@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>管理后台 · 社区通知公告</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">社区通知公告 · 管理后台</div>
+  <div class="topbar-right">
+    <span id="me-name"></span>
+    <a href="/resident" class="link">居民视图</a>
+    <button id="logout" class="btn btn-ghost">登出</button>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="card">
+    <h2>统计概览</h2>
+    <div id="stats" class="stats-grid">加载中…</div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>通知管理</h2>
+      <button id="new-notice" class="btn btn-primary">新建通知</button>
+    </div>
+    <div class="filters">
+      <input id="f-q" placeholder="搜索标题" class="input">
+      <select id="f-status" class="input">
+        <option value="">全部状态</option>
+        <option value="draft">草稿</option>
+        <option value="published">已发布</option>
+      </select>
+      <input id="f-category" placeholder="分类" class="input">
+      <button id="f-search" class="btn">筛选</button>
+    </div>
+    <div id="notice-list" class="table-wrap">
+      <table class="table">
+        <thead><tr><th>标题</th><th>状态</th><th>分类</th><th>优先级</th><th>置顶</th><th>发布时间</th><th>操作</th></tr></thead>
+        <tbody id="notice-tbody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>居民账号</h2>
+    <div class="card-head">
+      <button id="new-user" class="btn btn-primary">新建居民</button>
+    </div>
+    <div id="user-list" class="table-wrap">
+      <table class="table">
+        <thead><tr><th>用户名</th><th>显示名</th><th>角色</th><th>创建时间</th><th>操作</th></tr></thead>
+        <tbody id="user-tbody"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<!-- 通知编辑弹层 -->
+<div id="notice-modal" class="modal" hidden>
+  <div class="modal-card">
+    <h3 id="notice-modal-title">新建通知</h3>
+    <form id="notice-form" class="form">
+      <input type="hidden" id="n-id">
+      <label class="field"><span>标题</span><input id="n-title" class="input" maxlength="200" required></label>
+      <label class="field"><span>内容</span><textarea id="n-content" rows="8" maxlength="20000" required></textarea></label>
+      <div class="row">
+        <label class="field"><span>优先级 (0-999)</span><input id="n-priority" type="number" min="0" max="999" value="50" class="input"></label>
+        <label class="field"><span>分类</span><input id="n-category" class="input" maxlength="32" placeholder="如：设施维护"></label>
+      </div>
+      <label class="check"><input id="n-pinned" type="checkbox"> 置顶</label>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="notice-cancel">取消</button>
+        <button type="submit" class="btn btn-primary">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- 用户编辑弹层 -->
+<div id="user-modal" class="modal" hidden>
+  <div class="modal-card">
+    <h3>新建居民</h3>
+    <form id="user-form" class="form">
+      <label class="field"><span>用户名</span><input id="u-username" class="input" maxlength="32" required></label>
+      <label class="field"><span>显示名</span><input id="u-displayname" class="input" maxlength="32"></label>
+      <label class="field"><span>口令</span><input id="u-password" type="password" class="input" minlength="6" maxlength="64" required></label>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="user-cancel">取消</button>
+        <button type="submit" class="btn btn-primary">创建</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="/static/app.js"></script>
+<script src="/static/admin.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+services:
+  app:
+    build: .
+    image: go01-community-notice:latest
+    container_name: go01-community-notice
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - APP_ADDR=:8080
+      - APP_DATA_PATH=/app/data/store.json
+      - APP_ADMIN_USERNAME=admin
+      - APP_ADMIN_PASSWORD=admin123
+      - APP_SESSION_TTL=24h
+    restart: unless-stopped

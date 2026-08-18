@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>我的通知 · 社区通知公告</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">社区通知公告</div>
+  <div class="topbar-right">
+    <span id="me-name"></span>
+    <span id="unread-badge" class="badge" hidden></span>
+    <button id="logout" class="btn btn-ghost">登出</button>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="card">
+    <div class="card-head">
+      <h2>我的通知</h2>
+      <div class="filters">
+        <input id="f-q" placeholder="搜索标题" class="input">
+        <input id="f-category" placeholder="分类" class="input">
+        <button id="f-search" class="btn">筛选</button>
+      </div>
+    </div>
+    <div id="notice-list" class="notice-list">加载中…</div>
+  </section>
+</main>
+
+<div id="toast" class="toast" hidden></div>
+<script src="/static/app.js"></script>
+<script src="/static/resident.js"></script>
+</body>
+</html>
