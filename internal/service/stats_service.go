@@ -51,43 +51,42 @@ func (s *StatsService) Global(ctx context.Context) (model.GlobalStats, error) {
 			st.NoticePinned++
 		}
 	}
-	// 阅读总数与今日阅读数：遍历所有通知的阅读记录。
-	for _, n := range notices {
-		c, err := s.store.CountReadRecordsByNotice(ctx, n.ID)
-		if err != nil {
-			return st, err
-		}
-		st.ReadTotal += c
-	}
-	readToday, err := s.countReadsToday(ctx)
+	readTotal, readToday, err := s.currentReadStats(ctx, users, notices)
 	if err != nil {
 		return st, err
 	}
+	st.ReadTotal = readTotal
 	st.ReadToday = readToday
 	return st, nil
 }
 
-// countReadsToday 统计今日有阅读记录的（去重）数量近似：按 read record 计数。
-// 由于 Store 未暴露 ListAllReads，这里通过每个居民统计。
-func (s *StatsService) countReadsToday(ctx context.Context) (int, error) {
-	residents, err := s.store.ListUsers(ctx, model.RoleResident)
-	if err != nil {
-		return 0, err
+// currentReadStats 按“阅读时间不早于通知最后更新时间”统计当前有效阅读。
+func (s *StatsService) currentReadStats(ctx context.Context, users []model.User, notices []model.Notice) (total, today int, err error) {
+	noticeByID := make(map[string]model.Notice, len(notices))
+	for _, notice := range notices {
+		noticeByID[notice.ID] = notice
 	}
-	today := 0
 	start := s.startOfToday()
-	for _, u := range residents {
+	for _, u := range users {
+		if !u.IsResident() {
+			continue
+		}
 		reads, err := s.store.ListReadRecordsByUser(ctx, u.ID)
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		for _, rr := range reads {
+			notice, ok := noticeByID[rr.NoticeID]
+			if !ok || rr.ReadAt.Before(notice.UpdatedAt) {
+				continue
+			}
+			total++
 			if !rr.ReadAt.Before(start) {
 				today++
 			}
 		}
 	}
-	return today, nil
+	return total, today, nil
 }
 
 // startOfToday 当天 00:00（注入时钟）。
