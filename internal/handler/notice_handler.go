@@ -12,8 +12,13 @@ import (
 // 居民仅见已发布；管理员可通过 status/category/q/pinned/limit 筛选。
 func (h *Handler) ListNotices(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r)
+	status := model.NoticeStatus(queryStr(r, "status"))
+	if status != "" && !status.IsValid() {
+		respond.Error(w, http.StatusBadRequest, "bad_request", "不支持的通知状态")
+		return
+	}
 	f := model.NoticeFilter{
-		Status:     model.NoticeStatus(queryStr(r, "status")),
+		Status:     status,
 		Category:   queryStr(r, "category"),
 		Keyword:    queryStr(r, "q"),
 		AuthorID:   queryStr(r, "author_id"),
