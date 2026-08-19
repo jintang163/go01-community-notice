@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"go01-community-notice/internal/model"
 	"go01-community-notice/internal/store"
@@ -86,7 +87,7 @@ func (n *NoticeService) Update(ctx context.Context, id string, req model.UpdateN
 	changed := false
 	if req.Title != nil {
 		t := strings.TrimSpace(*req.Title)
-		if t == "" {
+		if utf8.RuneCountInString(t) < 1 || utf8.RuneCountInString(t) > 200 {
 			return model.Notice{}, model.ErrInvalidTitle
 		}
 		if t != notice.Title {
@@ -96,7 +97,7 @@ func (n *NoticeService) Update(ctx context.Context, id string, req model.UpdateN
 	}
 	if req.Content != nil {
 		c := strings.TrimSpace(*req.Content)
-		if c == "" {
+		if utf8.RuneCountInString(c) < 1 || utf8.RuneCountInString(c) > 20000 {
 			return model.Notice{}, model.ErrInvalidContent
 		}
 		if c != notice.Content {
@@ -121,7 +122,7 @@ func (n *NoticeService) Update(ctx context.Context, id string, req model.UpdateN
 	}
 	if req.Category != nil {
 		c := strings.TrimSpace(*req.Category)
-		if len(c) > 32 {
+		if utf8.RuneCountInString(c) > 32 {
 			return model.Notice{}, model.ErrInvalidCategory
 		}
 		if c != notice.Category {
