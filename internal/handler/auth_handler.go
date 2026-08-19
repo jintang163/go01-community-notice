@@ -28,10 +28,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		respond.DomainError(w, err)
 		return
 	}
-	respond.OK(w, model.LoginResponse{
-		Token: token,
-		User:  user,
-	})
+	respond.OK(w, model.NewLoginResponse(token, user))
 }
 
 // Logout 登出。POST /api/auth/logout
