@@ -269,6 +269,37 @@ func TestHandlerUpdateMeansUnreadViaAPI(t *testing.T) {
 	}
 }
 
+func TestHandlerUpdateNoticeEnforcesInputContract(t *testing.T) {
+	env := newHandlerEnv(t)
+	rec, body := env.do("POST", "/api/notices", env.adminToken, model.CreateNoticeRequest{
+		Title: "社区活动", Content: "原始内容",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, body)
+	}
+	var notice model.Notice
+	if err := json.Unmarshal(body, &notice); err != nil {
+		t.Fatalf("decode notice: %v", err)
+	}
+
+	oversizedTitle := strings.Repeat("通", 201)
+	rec, body = env.do("PUT", "/api/notices/"+notice.ID, env.adminToken, model.UpdateNoticeRequest{Title: &oversizedTitle})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for oversized update, got %d: %s", rec.Code, body)
+	}
+
+	rec, body = env.do("GET", "/api/notices/"+notice.ID, env.adminToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get after rejected update: %d %s", rec.Code, body)
+	}
+	if err := json.Unmarshal(body, &notice); err != nil {
+		t.Fatalf("decode stored notice: %v", err)
+	}
+	if notice.Title != "社区活动" {
+		t.Fatalf("rejected update changed stored title to %q", notice.Title)
+	}
+}
+
 func TestHandlerUnreadCount(t *testing.T) {
 	env := newHandlerEnv(t)
 	// 发布两条。
