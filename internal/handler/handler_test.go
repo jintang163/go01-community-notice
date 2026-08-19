@@ -195,6 +195,14 @@ func TestHandlerCreateNoticeFlow(t *testing.T) {
 	}
 }
 
+func TestHandlerNoticeListRejectsUnsupportedFilter(t *testing.T) {
+	env := newHandlerEnv(t)
+	rec, body := env.do("GET", "/api/notices?status=archived", env.adminToken, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unsupported filter, got %d: %s", rec.Code, body)
+	}
+}
+
 func TestHandlerResidentCannotAccessDraft(t *testing.T) {
 	env := newHandlerEnv(t)
 	rec, body := env.do("POST", "/api/notices", env.adminToken, model.CreateNoticeRequest{Title: "草稿", Content: "c"})
