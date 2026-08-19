@@ -325,6 +325,14 @@ func (s *MemoryStore) UpsertReadRecord(ctx context.Context, rr model.ReadRecord)
 	}
 	key := model.ReadKey{UserID: rr.UserID, NoticeID: rr.NoticeID}
 	s.mu.Lock()
+	if _, ok := s.users[rr.UserID]; !ok {
+		s.mu.Unlock()
+		return model.ReadRecord{}, model.ErrNotFound
+	}
+	if _, ok := s.notices[rr.NoticeID]; !ok {
+		s.mu.Unlock()
+		return model.ReadRecord{}, model.ErrNotFound
+	}
 	now := s.now()
 	if existing, ok := s.readIdx[key]; ok {
 		rr.ID = existing.ID
