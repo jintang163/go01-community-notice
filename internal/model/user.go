@@ -7,6 +7,7 @@ package model
 import (
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // UserRole 用户角色类型。
@@ -67,7 +68,7 @@ func (in UserInput) Validate() error {
 	if !in.Role.IsValid() {
 		return ErrInvalidRole
 	}
-	if len(in.DisplayName) > 32 {
+	if utf8.RuneCountInString(in.DisplayName) > 32 {
 		return ErrInvalidDisplayName
 	}
 	return nil

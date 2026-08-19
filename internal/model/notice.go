@@ -3,6 +3,7 @@ package model
 import (
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // NoticeStatus 通知状态。
@@ -72,16 +73,16 @@ func (in NoticeInput) Validate(isCreate bool) error {
 	in.Title = strings.TrimSpace(in.Title)
 	in.Content = strings.TrimSpace(in.Content)
 	in.Category = strings.TrimSpace(in.Category)
-	if len(in.Title) < 1 || len(in.Title) > 200 {
+	if utf8.RuneCountInString(in.Title) < 1 || utf8.RuneCountInString(in.Title) > 200 {
 		return ErrInvalidTitle
 	}
-	if len(in.Content) < 1 || len(in.Content) > 20000 {
+	if utf8.RuneCountInString(in.Content) < 1 || utf8.RuneCountInString(in.Content) > 20000 {
 		return ErrInvalidContent
 	}
 	if in.Priority < 0 || in.Priority > 999 {
 		return ErrInvalidPriority
 	}
-	if len(in.Category) > 32 {
+	if utf8.RuneCountInString(in.Category) > 32 {
 		return ErrInvalidCategory
 	}
 	if isCreate {
