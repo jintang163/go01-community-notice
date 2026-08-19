@@ -2,11 +2,26 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"go01-community-notice/internal/model"
 )
+
+func TestNoticeCreateAcceptsBoundaryLengthLocalizedText(t *testing.T) {
+	env := newTestEnv(t)
+	n, err := env.svc.Notice.Create(context.Background(), model.NoticeInput{
+		Title: strings.Repeat("公", 200), Content: "面向居民的通知内容",
+		Category: strings.Repeat("类", 32), Priority: model.PriorityNormal,
+	}, env.admin)
+	if err != nil {
+		t.Fatalf("create localized notice at documented limits: %v", err)
+	}
+	if n.ID == "" {
+		t.Fatal("expected created notice id")
+	}
+}
 
 func TestNoticeCreateDefaultsDraft(t *testing.T) {
 	env := newTestEnv(t)
