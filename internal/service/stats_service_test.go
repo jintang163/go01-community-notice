@@ -2,11 +2,18 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"go01-community-notice/internal/model"
+	"go01-community-notice/internal/store"
 )
+
+type failingStatsStore struct { store.Store }
+func (f failingStatsStore) ListReadRecordsByUser(context.Context, string) ([]model.ReadRecord, error) {
+	return nil, errors.New("read statistics unavailable")
+}
 
 func TestStatsGlobal(t *testing.T) {
 	env := newTestEnv(t)
@@ -79,5 +86,18 @@ func TestStatsNoticeAfterUpdate(t *testing.T) {
 	}
 	if stats.UnreadCount != 1 {
 		t.Errorf("expected 1 unread after update, got %d", stats.UnreadCount)
+	}
+}
+
+func TestStatsGlobalReportsReadAggregationFailure(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	n := env.createPublishedNotice(t, "统计故障")
+	if err := env.svc.Read.MarkRead(ctx, env.resident.ID, n.ID); err != nil {
+		t.Fatalf("mark read: %v", err)
+	}
+	svc := NewStatsService(failingStatsStore{Store: env.store}, env.clock)
+	if _, err := svc.Global(ctx); err == nil {
+		t.Fatal("expected global statistics to report read aggregation failure")
 	}
 }
