@@ -302,6 +302,45 @@ func TestHandlerStatsAdmin(t *testing.T) {
 	}
 }
 
+func TestHandlerGlobalStatsMatchesCurrentNoticeState(t *testing.T) {
+	env := newHandlerEnv(t)
+	rec, body := env.do("POST", "/api/notices", env.adminToken, model.CreateNoticeRequest{
+		Title: "供水安排", Content: "原安排", Status: model.StatusPublished,
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, body)
+	}
+	var notice model.Notice
+	if err := json.Unmarshal(body, &notice); err != nil {
+		t.Fatalf("decode notice: %v", err)
+	}
+
+	env.clock.Advance(time.Minute)
+	rec, body = env.do("POST", "/api/notices/"+notice.ID+"/read", env.resToken, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("mark read: %d %s", rec.Code, body)
+	}
+
+	env.clock.Advance(time.Minute)
+	updatedContent := "调整后的供水安排"
+	rec, body = env.do("PUT", "/api/notices/"+notice.ID, env.adminToken, model.UpdateNoticeRequest{Content: &updatedContent})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update: %d %s", rec.Code, body)
+	}
+
+	rec, body = env.do("GET", "/api/stats", env.adminToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("global stats: %d %s", rec.Code, body)
+	}
+	var stats model.GlobalStats
+	if err := json.Unmarshal(body, &stats); err != nil {
+		t.Fatalf("decode stats: %v", err)
+	}
+	if stats.ReadTotal != 0 {
+		t.Fatalf("expected current read total 0 after notice changed, got %d", stats.ReadTotal)
+	}
+}
+
 func TestHandlerBadRequestJSON(t *testing.T) {
 	env := newHandlerEnv(t)
 	req := httptest.NewRequest("POST", "/api/auth/login", strings.NewReader("not json"))
