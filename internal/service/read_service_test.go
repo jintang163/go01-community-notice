@@ -135,6 +135,22 @@ func TestReadAfterMarkRead(t *testing.T) {
 	}
 }
 
+func TestMarkReadRejectsDeletedResident(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	n := env.createPublishedNotice(t, "账户删除期间的通知")
+	residentID := env.resident.ID
+	if err := env.svc.Auth.DeleteUser(ctx, residentID, env.admin); err != nil {
+		t.Fatalf("delete resident: %v", err)
+	}
+	if err := env.svc.Read.MarkRead(ctx, residentID, n.ID); !model.IsNotFound(err) {
+		t.Fatalf("expected not found for deleted resident, got %v", err)
+	}
+	if _, err := env.store.GetReadRecord(ctx, residentID, n.ID); !model.IsNotFound(err) {
+		t.Fatalf("deleted resident must not leave a read record, got %v", err)
+	}
+}
+
 // TestUpdateMeansUnread 核心：管理员更新已发布通知 -> 居民回到未读。
 func TestUpdateMeansUnread(t *testing.T) {
 	env := newTestEnv(t)
