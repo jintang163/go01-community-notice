@@ -89,35 +89,45 @@ func (n *NoticeService) Update(ctx context.Context, id string, req model.UpdateN
 		if t == "" {
 			return model.Notice{}, model.ErrInvalidTitle
 		}
-		notice.Title = t
-		changed = true
+		if t != notice.Title {
+			notice.Title = t
+			changed = true
+		}
 	}
 	if req.Content != nil {
 		c := strings.TrimSpace(*req.Content)
 		if c == "" {
 			return model.Notice{}, model.ErrInvalidContent
 		}
-		notice.Content = c
-		changed = true
+		if c != notice.Content {
+			notice.Content = c
+			changed = true
+		}
 	}
 	if req.Priority != nil {
 		if *req.Priority < 0 || *req.Priority > 999 {
 			return model.Notice{}, model.ErrInvalidPriority
 		}
-		notice.Priority = *req.Priority
-		changed = true
+		if *req.Priority != notice.Priority {
+			notice.Priority = *req.Priority
+			changed = true
+		}
 	}
 	if req.Pinned != nil {
-		notice.Pinned = *req.Pinned
-		changed = true
+		if *req.Pinned != notice.Pinned {
+			notice.Pinned = *req.Pinned
+			changed = true
+		}
 	}
 	if req.Category != nil {
 		c := strings.TrimSpace(*req.Category)
 		if len(c) > 32 {
 			return model.Notice{}, model.ErrInvalidCategory
 		}
-		notice.Category = c
-		changed = true
+		if c != notice.Category {
+			notice.Category = c
+			changed = true
+		}
 	}
 	if !changed {
 		// 无任何字段，返回当前（不前移 UpdatedAt，避免无意义使已读失效）。
