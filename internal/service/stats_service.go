@@ -59,23 +59,27 @@ func (s *StatsService) Global(ctx context.Context) (model.GlobalStats, error) {
 		}
 		st.ReadTotal += c
 	}
-	st.ReadToday = s.countReadsToday(ctx, notices)
+	readToday, err := s.countReadsToday(ctx)
+	if err != nil {
+		return st, err
+	}
+	st.ReadToday = readToday
 	return st, nil
 }
 
 // countReadsToday 统计今日有阅读记录的（去重）数量近似：按 read record 计数。
 // 由于 Store 未暴露 ListAllReads，这里通过每个居民统计。
-func (s *StatsService) countReadsToday(ctx context.Context, notices []model.Notice) int {
+func (s *StatsService) countReadsToday(ctx context.Context) (int, error) {
 	residents, err := s.store.ListUsers(ctx, model.RoleResident)
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	today := 0
 	start := s.startOfToday()
 	for _, u := range residents {
 		reads, err := s.store.ListReadRecordsByUser(ctx, u.ID)
 		if err != nil {
-			continue
+			return 0, err
 		}
 		for _, rr := range reads {
 			if !rr.ReadAt.Before(start) {
@@ -83,7 +87,7 @@ func (s *StatsService) countReadsToday(ctx context.Context, notices []model.Noti
 			}
 		}
 	}
-	return today
+	return today, nil
 }
 
 // startOfToday 当天 00:00（注入时钟）。
