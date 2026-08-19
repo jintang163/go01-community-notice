@@ -36,6 +36,15 @@ type seqIDGen struct {
 	n  int
 }
 
+type failingReadStore struct {
+	store.Store
+	err error
+}
+
+func (s failingReadStore) UpsertReadRecord(context.Context, model.ReadRecord) (model.ReadRecord, error) {
+	return model.ReadRecord{}, s.err
+}
+
 func (g *seqIDGen) next(prefix string) string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -188,6 +197,16 @@ func TestViewDetailAdminNoRead(t *testing.T) {
 	}
 	if c, _ := env.store.CountReadRecordsByNotice(ctx, n.ID); c != 0 {
 		t.Errorf("expected 0 read records after admin view, got %d", c)
+	}
+}
+
+func TestViewDetailReportsReadPersistenceFailure(t *testing.T) {
+	env := newTestEnv(t)
+	n := env.createPublishedNotice(t, "持久化故障通知")
+	failing := failingReadStore{Store: env.store, err: fmt.Errorf("read persistence unavailable")}
+	svc := NewReadService(failing, env.clock)
+	if _, err := svc.ViewDetail(context.Background(), n.ID, env.resident); err == nil {
+		t.Fatal("expected detail view to report read persistence failure")
 	}
 }
 
