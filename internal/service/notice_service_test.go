@@ -115,6 +115,41 @@ func TestNoticeUpdateAdvancesUpdatedAt(t *testing.T) {
 	}
 }
 
+func TestNoticeUpdateSameValuesKeepsResidentReadState(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	n := env.createPublishedNotice(t, "停水提醒")
+	env.clock.Advance(time.Minute)
+	if err := env.svc.Read.MarkRead(ctx, env.resident.ID, n.ID); err != nil {
+		t.Fatalf("mark read: %v", err)
+	}
+	current, err := env.store.GetNotice(ctx, n.ID)
+	if err != nil {
+		t.Fatalf("get notice: %v", err)
+	}
+	env.clock.Advance(time.Minute)
+	updated, err := env.svc.Notice.Update(ctx, n.ID, model.UpdateNoticeRequest{
+		Title:    &current.Title,
+		Content:  &current.Content,
+		Priority: &current.Priority,
+		Pinned:   &current.Pinned,
+		Category: &current.Category,
+	}, env.admin)
+	if err != nil {
+		t.Fatalf("update same values: %v", err)
+	}
+	if !updated.UpdatedAt.Equal(current.UpdatedAt) {
+		t.Errorf("same-value update changed timestamp: before=%s after=%s", current.UpdatedAt, updated.UpdatedAt)
+	}
+	read, err := env.svc.Read.IsRead(ctx, env.resident.ID, n.ID)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if !read {
+		t.Fatal("resident became unread after a same-value update")
+	}
+}
+
 func TestNoticeDeleteForbidden(t *testing.T) {
 	env := newTestEnv(t)
 	ctx := context.Background()
