@@ -15,11 +15,10 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 			allowed[o] = struct{}{}
 		}
 	}
-	allowAll := len(allowed) == 0
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
-			if origin != "" && (allowAll || hasKey(allowed, origin)) {
+			if originAllowed(allowed, origin) {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Vary", "Origin")
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
@@ -36,7 +35,10 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 	}
 }
 
-func hasKey(m map[string]struct{}, k string) bool {
-	_, ok := m[k]
+func originAllowed(allowed map[string]struct{}, origin string) bool {
+	if origin == "" || len(allowed) == 0 {
+		return false
+	}
+	_, ok := allowed[origin]
 	return ok
 }
