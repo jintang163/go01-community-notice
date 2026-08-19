@@ -143,6 +143,27 @@ func TestHandlerLoginBadCredentials(t *testing.T) {
 	}
 }
 
+func TestHandlerLoginReturnsPublicProfileOnly(t *testing.T) {
+	env := newHandlerEnv(t)
+	rec, body := env.do("POST", "/api/auth/login", "", model.LoginRequest{Username: "admin", Password: "admin123"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login: %d %s", rec.Code, body)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal login response: %v", err)
+	}
+	user, ok := payload["user"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing public user profile: %s", body)
+	}
+	for _, field := range []string{"password_hash", "password_salt", "iterations"} {
+		if _, exposed := user[field]; exposed {
+			t.Errorf("login response exposed internal field %q", field)
+		}
+	}
+}
+
 func TestHandlerCreateNoticeFlow(t *testing.T) {
 	env := newHandlerEnv(t)
 	// 管理员创建草稿。
