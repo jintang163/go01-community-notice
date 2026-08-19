@@ -68,12 +68,15 @@ func (r *ReadService) ViewDetail(ctx context.Context, noticeID string, viewer mo
 		return model.Notice{}, model.ErrNotFound
 	}
 	// 仅居民查看已发布通知才标记已读；管理员查看不产生阅读记录。
+	// 标记已读失败时必须返回错误，不能静默成功（否则居民误以为已读而实际未持久化）。
 	if viewer.IsResident() && notice.IsPublished() {
-		_, _ = r.store.UpsertReadRecord(ctx, model.ReadRecord{
+		if _, err = r.store.UpsertReadRecord(ctx, model.ReadRecord{
 			UserID:   viewer.ID,
 			NoticeID: noticeID,
 			ReadAt:   r.now(),
-		})
+		}); err != nil {
+			return model.Notice{}, err
+		}
 	}
 	return notice, nil
 }
