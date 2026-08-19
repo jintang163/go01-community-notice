@@ -50,12 +50,7 @@ func (r *ReadService) MarkRead(ctx context.Context, userID, noticeID string) err
 	if !notice.IsPublished() {
 		return model.ErrNotFound
 	}
-	_, err = r.store.UpsertReadRecord(ctx, model.ReadRecord{
-		UserID:   userID,
-		NoticeID: noticeID,
-		ReadAt:   r.now(),
-	})
-	return err
+	return r.recordRead(ctx, userID, noticeID)
 }
 
 // ViewDetail 居民查看通知详情：校验可见性 + 标记已读 + 返回通知。
@@ -69,13 +64,18 @@ func (r *ReadService) ViewDetail(ctx context.Context, noticeID string, viewer mo
 	}
 	// 仅居民查看已发布通知才标记已读；管理员查看不产生阅读记录。
 	if viewer.IsResident() && notice.IsPublished() {
-		_, _ = r.store.UpsertReadRecord(ctx, model.ReadRecord{
-			UserID:   viewer.ID,
-			NoticeID: noticeID,
-			ReadAt:   r.now(),
-		})
+		if err := r.recordRead(ctx, viewer.ID, noticeID); err != nil {
+			return model.Notice{}, err
+		}
 	}
 	return notice, nil
+}
+
+func (r *ReadService) recordRead(ctx context.Context, userID, noticeID string) error {
+	_, err := r.store.UpsertReadRecord(ctx, model.ReadRecord{
+		UserID: userID, NoticeID: noticeID, ReadAt: r.now(),
+	})
+	return err
 }
 
 // ListForResident 列出面向某居民的通知（仅已发布），并附带已读状态。
