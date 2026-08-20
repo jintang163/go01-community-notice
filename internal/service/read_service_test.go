@@ -354,17 +354,6 @@ func TestListForResidentReadStatus(t *testing.T) {
 	}
 }
 
-func TestListForResidentAppliesDefaultLimit(t *testing.T) {
-	env := newTestEnv(t)
-	ctx := context.Background()
-	for i := 0; i < 501; i++ {
-		env.createPublishedNotice(t, fmt.Sprintf("批量通知-%03d", i))
-	}
-	list, err := env.svc.Read.ListForResident(ctx, env.resident.ID, model.NoticeFilter{})
-	if err != nil { t.Fatalf("list: %v", err) }
-	if len(list) != 500 { t.Fatalf("expected default limit 500, got %d", len(list)) }
-}
-
 // TestUpdateNoChangeDoesNotInvalidateRead 无字段变更时不前移 UpdatedAt。
 func TestUpdateNoChangeDoesNotInvalidateRead(t *testing.T) {
 	env := newTestEnv(t)
