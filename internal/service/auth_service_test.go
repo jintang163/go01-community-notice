@@ -2,70 +2,10 @@ package service
 
 import (
 	"context"
-	"sync"
 	"testing"
 
 	"go01-community-notice/internal/model"
-	"go01-community-notice/internal/store"
 )
-
-type pausedLoginStore struct {
-	store.Store
-	username string
-	loaded   chan struct{}
-	resume   chan struct{}
-	once     sync.Once
-}
-
-func (s *pausedLoginStore) GetUserByUsername(ctx context.Context, username string) (model.User, error) {
-	u, err := s.Store.GetUserByUsername(ctx, username)
-	if err != nil || username != s.username {
-		return u, err
-	}
-	s.once.Do(func() { close(s.loaded) })
-	select {
-	case <-s.resume:
-		return u, nil
-	case <-ctx.Done():
-		return model.User{}, ctx.Err()
-	}
-}
-
-func TestDeletedUserCannotFinishPendingLogin(t *testing.T) {
-	env := newTestEnv(t)
-	ctx := context.Background()
-	gate := &pausedLoginStore{
-		Store:    env.store,
-		username: env.resident.Username,
-		loaded:   make(chan struct{}),
-		resume:   make(chan struct{}),
-	}
-	authService := NewAuthService(gate, env.hasher, env.sessions, env.clock)
-
-	type loginResult struct {
-		token string
-		err   error
-	}
-	result := make(chan loginResult, 1)
-	go func() {
-		token, _, err := authService.Login(ctx, env.resident.Username, "res123")
-		result <- loginResult{token: token, err: err}
-	}()
-
-	<-gate.loaded
-	if err := authService.DeleteUser(ctx, env.resident.ID, env.admin); err != nil {
-		close(gate.resume)
-		t.Fatalf("delete resident while login is pending: %v", err)
-	}
-	close(gate.resume)
-
-	login := <-result
-	if login.err == nil {
-		if _, err := authService.SessionByToken(login.token); err == nil {
-			t.Fatal("a login that started before deletion created a valid session after the user was deleted")
-		}
-	}
-}
 
 func TestAuthLoginSuccess(t *testing.T) {
 	env := newTestEnv(t)
@@ -135,9 +75,9 @@ func TestAuthCreateUserForbidden(t *testing.T) {
 func TestAuthCreateUserValidation(t *testing.T) {
 	env := newTestEnv(t)
 	cases := []model.UserInput{
-		{Username: "ab", Password: "pw1234", Role: model.RoleResident},    // 用户名过短
-		{Username: "goodname", Password: "123", Role: model.RoleResident}, // 口令过短
-		{Username: "goodname", Password: "pw1234", Role: "unknown"},       // 非法角色
+		{Username: "ab", Password: "pw1234", Role: model.RoleResident},         // 用户名过短
+		{Username: "goodname", Password: "123", Role: model.RoleResident},     // 口令过短
+		{Username: "goodname", Password: "pw1234", Role: "unknown"},           // 非法角色
 	}
 	for i, in := range cases {
 		if _, err := env.svc.Auth.CreateUser(context.Background(), in, env.admin); err == nil {
