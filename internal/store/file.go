@@ -1,14 +1,12 @@
 package store
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"go01-community-notice/internal/model"
@@ -29,14 +27,15 @@ const snapshotVersion = 1
 //
 // 设计：
 //   - 启动时 Load() 读取数据文件，整体替换内存状态。
-//   - 每个写操作成功后，MemoryStore 调用 persistHook，触发 Save() 落盘。
+//   - 每个写操作在写锁内完成内存变更后调用 persistHook，触发 Save() 落盘。
+//   - Save() 在写锁内取快照（深拷贝切片）并写文件，避免与并发写交错产生
+//     "回滚后被后续快照重新落盘"的不一致。
 //   - Save() 采用"写临时文件 + os.Rename"的原子写策略，避免写中途崩溃损坏数据。
-//   - Save() 在 RLock 下取快照（深拷贝切片），释放锁后再写文件，不阻塞写操作。
+//   - 落盘失败时 Save() 返回错误，MemoryStore 据此回滚内存变更并向调用方返回失败，
+//     确保确认成功当且仅当变更已可靠落盘。
 type FileStore struct {
 	mem  *MemoryStore
 	path string
-
-	saveMu sync.Mutex // 串行化磁盘写，避免并发写互相覆盖
 }
 
 // NewFileStore 创建文件持久化存储。若数据文件存在则自动加载。
@@ -70,23 +69,22 @@ func (fs *FileStore) load() error {
 	return nil
 }
 
-// save 将当前内存状态原子写入磁盘。由 MemoryStore 写后钩子调用。
-func (fs *FileStore) save() {
-	fs.saveMu.Lock()
-	defer fs.saveMu.Unlock()
-
+// save 将当前内存状态原子写入磁盘。由 MemoryStore 在写锁内通过持久化钩子调用。
+// 返回持久化错误，使 MemoryStore 能在写锁内回滚内存变更、向调用方返回失败。
+func (fs *FileStore) save() error {
+	users, notices, reads := fs.mem.snapshotLocked()
 	snap := snapshotData{
 		Version: snapshotVersion,
-		Users:   fs.mem.AllUsers(),
-		Notices: fs.mem.AllNotices(),
-		Reads:   fs.mem.AllReads(),
+		Users:   users,
+		Notices: notices,
+		Reads:   reads,
 	}
-
 	if err := fs.writeAtomic(snap); err != nil {
-		// 持久化失败不应使业务请求失败（数据仍在内存中），
-		// 但需记录错误。这里用 stderr 输出，避免引入外部日志库。
+		// 错误已向上返回以便回滚；同时记录到 stderr 便于排查根因。
 		fmt.Fprintf(os.Stderr, "store: persist failed: %v\n", err)
+		return err
 	}
+	return nil
 }
 
 // writeAtomic 原子写：先写临时文件，再 rename 覆盖目标文件。
@@ -128,18 +126,7 @@ func (fs *FileStore) writeAtomic(snap snapshotData) error {
 }
 
 // Flush 强制立即写一次快照（用于优雅关闭前落盘）。
+// 通过 PersistNow 在写锁内触发落盘，与并发写操作互斥。
 func (fs *FileStore) Flush() error {
-	fs.saveMu.Lock()
-	defer fs.saveMu.Unlock()
-	snap := snapshotData{
-		Version: snapshotVersion,
-		Users:   fs.mem.AllUsers(),
-		Notices: fs.mem.AllNotices(),
-		Reads:   fs.mem.AllReads(),
-	}
-	return fs.writeAtomic(snap)
+	return fs.mem.PersistNow()
 }
-
-// 确保编译期接口实现检查（FileStore 提供 Store()，不直接实现 Store，
-// 此处保留以提示用法）。
-var _ = context.Background

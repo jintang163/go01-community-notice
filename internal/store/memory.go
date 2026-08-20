@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -15,8 +16,12 @@ type IDGenerator func(prefix string) string
 
 // MemoryStore 基于 map + sync.RWMutex 的内存实现。
 //
-// 持久化由调用方（FileStore）通过 persistHook 回调驱动：每个写方法成功后
-// 在释放写锁后调用 persistHook（若已设置），保证不会在持锁状态下重入死锁。
+// 持久化由调用方（FileStore）通过 persistHook 回调驱动：每个写方法在写锁内
+// 完成内存变更后调用 persistHook（若已设置）落盘。持久化是创建/更新/删除流程
+// 的一部分——若落盘失败，写方法回滚内存变更并返回错误，保证"磁盘与内存一致"：
+// 向调用方确认成功当且仅当变更已可靠落盘，避免出现"内存中有、磁盘上无"的幻影
+// 数据（重启后丢失，造成账号已创建的假象）。因此 persistHook 在写锁内调用，
+// 回调不得再次获取读锁或写锁（会重入死锁）。
 type MemoryStore struct {
 	mu sync.RWMutex
 
@@ -28,7 +33,7 @@ type MemoryStore struct {
 
 	now  func() time.Time
 	genID IDGenerator
-	persistHook func() // 写后持久化回调（由 FileStore 注入）
+	persistHook func() error // 写后持久化回调（由 FileStore 注入）；在写锁内调用，返回错误以便回滚
 }
 
 // NewMemoryStore 创建内存存储。
@@ -54,17 +59,30 @@ func NewMemoryStore(now func() time.Time, genID IDGenerator) *MemoryStore {
 }
 
 // SetPersistHook 设置写后持久化回调。FileStore 用它把内存快照落盘。
-func (s *MemoryStore) SetPersistHook(hook func()) {
+// 回调在写锁内被调用；返回错误时调用方将回滚本次内存变更并返回失败，
+// 确保持久化失败不会留下"内存中有、磁盘上无"的幻影数据。
+func (s *MemoryStore) SetPersistHook(hook func() error) {
 	s.mu.Lock()
 	s.persistHook = hook
 	s.mu.Unlock()
 }
 
-// afterWrite 在写锁释放后安全地触发持久化。
-func (s *MemoryStore) afterWrite() {
+// persistLocked 触发持久化钩子；须在已持有写锁（mu.Lock）时调用。
+// 钩子不得再获取读锁或写锁（会重入死锁），应在已持锁前提下直接读取内存快照落盘。
+// 返回持久化错误，供调用方在写锁内回滚内存变更。
+func (s *MemoryStore) persistLocked() error {
 	if s.persistHook != nil {
-		s.persistHook()
+		return s.persistHook()
 	}
+	return nil
+}
+
+// PersistNow 强制立即持久化一次当前内存状态（用于优雅关闭前落盘）。
+// 在写锁内调用持久化钩子，与并发写操作互斥。
+func (s *MemoryStore) PersistNow() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.persistLocked()
 }
 
 // ---- 用户 ----
@@ -76,8 +94,8 @@ func (s *MemoryStore) CreateUser(ctx context.Context, u model.User) (model.User,
 	u.Username = strings.TrimSpace(u.Username)
 	u.DisplayName = sanitizeDisplayName(u.DisplayName)
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if _, exists := s.username[u.Username]; exists {
-		s.mu.Unlock()
 		return model.User{}, model.ErrAlreadyExists
 	}
 	now := s.now()
@@ -86,8 +104,13 @@ func (s *MemoryStore) CreateUser(ctx context.Context, u model.User) (model.User,
 	u.UpdatedAt = now
 	s.users[u.ID] = u
 	s.username[u.Username] = u.ID
-	s.mu.Unlock()
-	s.afterWrite()
+	if err := s.persistLocked(); err != nil {
+		// 持久化失败：回滚内存创建，确保磁盘与内存一致（均无此用户），
+		// 避免向管理员确认成功却无法恢复的"幻影账号"。
+		delete(s.users, u.ID)
+		delete(s.username, u.Username)
+		return model.User{}, fmt.Errorf("persist user: %w", err)
+	}
 	return u, nil
 }
 
@@ -143,15 +166,15 @@ func (s *MemoryStore) UpdateUser(ctx context.Context, u model.User) (model.User,
 	u.Username = strings.TrimSpace(u.Username)
 	u.DisplayName = sanitizeDisplayName(u.DisplayName)
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	cur, ok := s.users[u.ID]
 	if !ok {
-		s.mu.Unlock()
 		return model.User{}, model.ErrNotFound
 	}
 	// 若用户名变更，检查新用户名是否已被占用。
-	if u.Username != cur.Username {
+	usernameChanged := u.Username != cur.Username
+	if usernameChanged {
 		if otherID, exists := s.username[u.Username]; exists && otherID != u.ID {
-			s.mu.Unlock()
 			return model.User{}, model.ErrAlreadyExists
 		}
 		delete(s.username, cur.Username)
@@ -160,8 +183,15 @@ func (s *MemoryStore) UpdateUser(ctx context.Context, u model.User) (model.User,
 	u.CreatedAt = cur.CreatedAt
 	u.UpdatedAt = s.now()
 	s.users[u.ID] = u
-	s.mu.Unlock()
-	s.afterWrite()
+	if err := s.persistLocked(); err != nil {
+		// 回滚到更新前状态。
+		s.users[u.ID] = cur
+		if usernameChanged {
+			delete(s.username, u.Username)
+			s.username[cur.Username] = cur.ID
+		}
+		return model.User{}, fmt.Errorf("persist user: %w", err)
+	}
 	return u, nil
 }
 
@@ -170,22 +200,32 @@ func (s *MemoryStore) DeleteUser(ctx context.Context, id string) error {
 		return err
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	u, ok := s.users[id]
 	if !ok {
-		s.mu.Unlock()
 		return model.ErrNotFound
 	}
+	// 捕获级联删除的阅读记录，便于持久化失败时回滚。
+	var deletedReads []model.ReadRecord
 	delete(s.users, id)
 	delete(s.username, u.Username)
-	// 级联删除该用户的阅读记录。
 	for _, rr := range s.reads {
 		if rr.UserID == id {
 			delete(s.reads, rr.ID)
 			delete(s.readIdx, model.ReadKey{UserID: rr.UserID, NoticeID: rr.NoticeID})
+			deletedReads = append(deletedReads, rr)
 		}
 	}
-	s.mu.Unlock()
-	s.afterWrite()
+	if err := s.persistLocked(); err != nil {
+		// 回滚：恢复用户与其级联删除的阅读记录。
+		s.users[u.ID] = u
+		s.username[u.Username] = u.ID
+		for _, rr := range deletedReads {
+			s.reads[rr.ID] = rr
+			s.readIdx[model.ReadKey{UserID: rr.UserID, NoticeID: rr.NoticeID}] = rr
+		}
+		return fmt.Errorf("persist delete user: %w", err)
+	}
 	return nil
 }
 
@@ -202,6 +242,7 @@ func (s *MemoryStore) CreateNotice(ctx context.Context, n model.Notice) (model.N
 		n.Status = model.StatusDraft
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	now := s.now()
 	n.ID = s.genID(model.NoticeIDPrefix)
 	n.CreatedAt = now
@@ -211,8 +252,10 @@ func (s *MemoryStore) CreateNotice(ctx context.Context, n model.Notice) (model.N
 		n.PublishAt = &pa
 	}
 	s.notices[n.ID] = n
-	s.mu.Unlock()
-	s.afterWrite()
+	if err := s.persistLocked(); err != nil {
+		delete(s.notices, n.ID)
+		return model.Notice{}, fmt.Errorf("persist notice: %w", err)
+	}
 	return n, nil
 }
 
@@ -275,9 +318,9 @@ func (s *MemoryStore) UpdateNotice(ctx context.Context, n model.Notice) (model.N
 		n.Status = model.StatusDraft
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	cur, ok := s.notices[n.ID]
 	if !ok {
-		s.mu.Unlock()
 		return model.Notice{}, model.ErrNotFound
 	}
 	n.CreatedAt = cur.CreatedAt
@@ -290,8 +333,10 @@ func (s *MemoryStore) UpdateNotice(ctx context.Context, n model.Notice) (model.N
 		n.PublishAt = nil
 	}
 	s.notices[n.ID] = n
-	s.mu.Unlock()
-	s.afterWrite()
+	if err := s.persistLocked(); err != nil {
+		s.notices[n.ID] = cur
+		return model.Notice{}, fmt.Errorf("persist notice: %w", err)
+	}
 	return n, nil
 }
 
@@ -300,20 +345,30 @@ func (s *MemoryStore) DeleteNotice(ctx context.Context, id string) error {
 		return err
 	}
 	s.mu.Lock()
-	if _, ok := s.notices[id]; !ok {
-		s.mu.Unlock()
+	defer s.mu.Unlock()
+	n, ok := s.notices[id]
+	if !ok {
 		return model.ErrNotFound
 	}
+	// 捕获级联删除的阅读记录，便于持久化失败时回滚。
+	var deletedReads []model.ReadRecord
 	delete(s.notices, id)
-	// 级联删除该通知的阅读记录。
 	for _, rr := range s.reads {
 		if rr.NoticeID == id {
 			delete(s.reads, rr.ID)
 			delete(s.readIdx, model.ReadKey{UserID: rr.UserID, NoticeID: rr.NoticeID})
+			deletedReads = append(deletedReads, rr)
 		}
 	}
-	s.mu.Unlock()
-	s.afterWrite()
+	if err := s.persistLocked(); err != nil {
+		// 回滚：恢复通知与其级联删除的阅读记录。
+		s.notices[n.ID] = n
+		for _, rr := range deletedReads {
+			s.reads[rr.ID] = rr
+			s.readIdx[model.ReadKey{UserID: rr.UserID, NoticeID: rr.NoticeID}] = rr
+		}
+		return fmt.Errorf("persist delete notice: %w", err)
+	}
 	return nil
 }
 
@@ -321,14 +376,17 @@ func (s *MemoryStore) DeleteNotice(ctx context.Context, id string) error {
 func (s *MemoryStore) UpdateNoticeMetadata(ctx context.Context, n model.Notice) (model.Notice, error) {
 	if err := ctx.Err(); err != nil { return model.Notice{}, err }
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	cur, ok := s.notices[n.ID]
-	if !ok { s.mu.Unlock(); return model.Notice{}, model.ErrNotFound }
+	if !ok { return model.Notice{}, model.ErrNotFound }
 	n.CreatedAt = cur.CreatedAt
 	n.UpdatedAt = cur.UpdatedAt
 	n.PublishAt = cur.PublishAt
 	s.notices[n.ID] = n
-	s.mu.Unlock()
-	s.afterWrite()
+	if err := s.persistLocked(); err != nil {
+		s.notices[n.ID] = cur
+		return model.Notice{}, fmt.Errorf("persist notice metadata: %w", err)
+	}
 	return n, nil
 }
 
@@ -340,12 +398,11 @@ func (s *MemoryStore) UpsertReadRecord(ctx context.Context, rr model.ReadRecord)
 	}
 	key := model.ReadKey{UserID: rr.UserID, NoticeID: rr.NoticeID}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if _, ok := s.users[rr.UserID]; !ok {
-		s.mu.Unlock()
 		return model.ReadRecord{}, model.ErrNotFound
 	}
 	if _, ok := s.notices[rr.NoticeID]; !ok {
-		s.mu.Unlock()
 		return model.ReadRecord{}, model.ErrNotFound
 	}
 	now := s.now()
@@ -355,8 +412,12 @@ func (s *MemoryStore) UpsertReadRecord(ctx context.Context, rr model.ReadRecord)
 		rr.ReadAt = now
 		s.reads[rr.ID] = rr
 		s.readIdx[key] = rr
-		s.mu.Unlock()
-		s.afterWrite()
+		if err := s.persistLocked(); err != nil {
+			// 回滚到更新前的阅读记录。
+			s.reads[existing.ID] = existing
+			s.readIdx[key] = existing
+			return model.ReadRecord{}, fmt.Errorf("persist read record: %w", err)
+		}
 		return rr, nil
 	}
 	rr.ID = s.genID(model.ReadIDPrefix)
@@ -364,8 +425,11 @@ func (s *MemoryStore) UpsertReadRecord(ctx context.Context, rr model.ReadRecord)
 	rr.ReadAt = now
 	s.reads[rr.ID] = rr
 	s.readIdx[key] = rr
-	s.mu.Unlock()
-	s.afterWrite()
+	if err := s.persistLocked(); err != nil {
+		delete(s.reads, rr.ID)
+		delete(s.readIdx, key)
+		return model.ReadRecord{}, fmt.Errorf("persist read record: %w", err)
+	}
 	return rr, nil
 }
 
@@ -420,14 +484,23 @@ func (s *MemoryStore) DeleteReadRecordsByNotice(ctx context.Context, noticeID st
 		return err
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	// 捕获被删除的阅读记录，便于持久化失败时回滚。
+	var deletedReads []model.ReadRecord
 	for _, rr := range s.reads {
 		if rr.NoticeID == noticeID {
 			delete(s.reads, rr.ID)
 			delete(s.readIdx, model.ReadKey{UserID: rr.UserID, NoticeID: rr.NoticeID})
+			deletedReads = append(deletedReads, rr)
 		}
 	}
-	s.mu.Unlock()
-	s.afterWrite()
+	if err := s.persistLocked(); err != nil {
+		for _, rr := range deletedReads {
+			s.reads[rr.ID] = rr
+			s.readIdx[model.ReadKey{UserID: rr.UserID, NoticeID: rr.NoticeID}] = rr
+		}
+		return fmt.Errorf("persist delete reads by notice: %w", err)
+	}
 	return nil
 }
 
@@ -436,48 +509,43 @@ func (s *MemoryStore) DeleteReadRecordsByUser(ctx context.Context, userID string
 		return err
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	// 捕获被删除的阅读记录，便于持久化失败时回滚。
+	var deletedReads []model.ReadRecord
 	for _, rr := range s.reads {
 		if rr.UserID == userID {
 			delete(s.reads, rr.ID)
 			delete(s.readIdx, model.ReadKey{UserID: rr.UserID, NoticeID: rr.NoticeID})
+			deletedReads = append(deletedReads, rr)
 		}
 	}
-	s.mu.Unlock()
-	s.afterWrite()
+	if err := s.persistLocked(); err != nil {
+		for _, rr := range deletedReads {
+			s.reads[rr.ID] = rr
+			s.readIdx[model.ReadKey{UserID: rr.UserID, NoticeID: rr.NoticeID}] = rr
+		}
+		return fmt.Errorf("persist delete reads by user: %w", err)
+	}
 	return nil
 }
 
-// AllUsers 返回全部用户副本（仅供 FileStore 快照用）。
-func (s *MemoryStore) AllUsers() []model.User {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]model.User, 0, len(s.users))
+// snapshotLocked 返回当前全部数据的快照（深拷贝切片）。
+// 调用方必须已持有写锁（mu.Lock）；本方法不再加锁，避免在写锁内重入读锁而死锁。
+// 供 FileStore.save 在写锁内落盘使用。
+func (s *MemoryStore) snapshotLocked() (users []model.User, notices []model.Notice, reads []model.ReadRecord) {
+	users = make([]model.User, 0, len(s.users))
 	for _, u := range s.users {
-		out = append(out, u)
+		users = append(users, u)
 	}
-	return out
-}
-
-// AllNotices 返回全部通知副本。
-func (s *MemoryStore) AllNotices() []model.Notice {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]model.Notice, 0, len(s.notices))
+	notices = make([]model.Notice, 0, len(s.notices))
 	for _, n := range s.notices {
-		out = append(out, n)
+		notices = append(notices, n)
 	}
-	return out
-}
-
-// AllReads 返回全部阅读记录副本。
-func (s *MemoryStore) AllReads() []model.ReadRecord {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]model.ReadRecord, 0, len(s.reads))
+	reads = make([]model.ReadRecord, 0, len(s.reads))
 	for _, rr := range s.reads {
-		out = append(out, rr)
+		reads = append(reads, rr)
 	}
-	return out
+	return users, notices, reads
 }
 
 // ReplaceAll 用给定数据整体替换内存状态（FileStore 加载文件后调用）。
