@@ -47,7 +47,7 @@ func (r *ReadService) MarkRead(ctx context.Context, userID, noticeID string) err
 	if err != nil {
 		return err
 	}
-	if !notice.IsPublished() {
+	if !notice.HasResidentReadState() {
 		return model.ErrNotFound
 	}
 	return r.recordRead(ctx, userID, noticeID)
@@ -63,7 +63,7 @@ func (r *ReadService) ViewDetail(ctx context.Context, noticeID string, viewer mo
 		return model.Notice{}, model.ErrNotFound
 	}
 	// 仅居民查看已发布通知才标记已读；管理员查看不产生阅读记录。
-	if viewer.IsResident() && notice.IsPublished() {
+	if viewer.IsResident() && notice.HasResidentReadState() {
 		if err := r.recordRead(ctx, viewer.ID, noticeID); err != nil {
 			return model.Notice{}, err
 		}

@@ -58,14 +58,18 @@ func (n Notice) IsPublished() bool { return n.Status == StatusPublished }
 // IsDraft 是否草稿。
 func (n Notice) IsDraft() bool { return n.Status == StatusDraft }
 
+// HasResidentReadState 表示通知当前是否对居民存在已读/未读语义。
+// 草稿不可见，因此不能生成或展示居民阅读统计。
+func (n Notice) HasResidentReadState() bool { return n.IsPublished() }
+
 // NoticeInput 创建/更新通知的输入参数。
 type NoticeInput struct {
-	Title     string `json:"title"`
-	Content   string `json:"content"`
-	Priority  int    `json:"priority"`
-	Pinned    bool   `json:"pinned"`
-	Category  string `json:"category"`
-	Status    NoticeStatus `json:"status"`
+	Title    string       `json:"title"`
+	Content  string       `json:"content"`
+	Priority int          `json:"priority"`
+	Pinned   bool         `json:"pinned"`
+	Category string       `json:"category"`
+	Status   NoticeStatus `json:"status"`
 }
 
 // Validate 校验通知输入。

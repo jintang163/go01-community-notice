@@ -104,6 +104,9 @@ func (s *StatsService) NoticeByID(ctx context.Context, noticeID string) (model.N
 	if err != nil {
 		return model.NoticeStats{}, err
 	}
+	if !notice.HasResidentReadState() {
+		return model.NoticeStats{}, model.ErrNotFound
+	}
 	residents, err := s.store.ListUsers(ctx, model.RoleResident)
 	if err != nil {
 		return model.NoticeStats{}, err
