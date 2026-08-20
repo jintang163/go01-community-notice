@@ -97,6 +97,19 @@ func TestNoticePublishAndUnpublish(t *testing.T) {
 	}
 }
 
+func TestPinningReadNoticeKeepsItRead(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	n, err := env.svc.Notice.Create(ctx, model.NoticeInput{Title: "公告", Content: "内容", Status: model.StatusPublished}, env.admin)
+	if err != nil { t.Fatalf("create: %v", err) }
+	if err := env.svc.Read.MarkRead(ctx, env.resident.ID, n.ID); err != nil { t.Fatalf("mark read: %v", err) }
+	env.clock.Advance(time.Minute)
+	if _, err := env.svc.Notice.TogglePin(ctx, n.ID, env.admin); err != nil { t.Fatalf("pin: %v", err) }
+	read, err := env.svc.Read.IsRead(ctx, env.resident.ID, n.ID)
+	if err != nil { t.Fatalf("read status: %v", err) }
+	if !read { t.Fatal("pinning should not make an unchanged notice unread") }
+}
+
 func TestNoticeTogglePin(t *testing.T) {
 	env := newTestEnv(t)
 	ctx := context.Background()

@@ -295,6 +295,7 @@ func (s *MemoryStore) UpdateNotice(ctx context.Context, n model.Notice) (model.N
 	return n, nil
 }
 
+
 func (s *MemoryStore) DeleteNotice(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
