@@ -312,6 +312,25 @@ func TestHandlerStatsAdmin(t *testing.T) {
 	}
 }
 
+func TestDraftNoticeHasNoResidentReadStats(t *testing.T) {
+	env := newHandlerEnv(t)
+	rec, body := env.do("POST", "/api/notices", env.adminToken, model.CreateNoticeRequest{
+		Title: "待确认的停水安排", Content: "尚未对居民发布",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create draft: %d %s", rec.Code, body)
+	}
+	var notice model.Notice
+	if err := json.Unmarshal(body, &notice); err != nil {
+		t.Fatalf("decode draft: %v", err)
+	}
+
+	rec, body = env.do("GET", "/api/stats/notices/"+notice.ID, env.adminToken, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected draft read stats to be unavailable, got %d: %s", rec.Code, body)
+	}
+}
+
 func TestHandlerGlobalStatsMatchesCurrentNoticeState(t *testing.T) {
 	env := newHandlerEnv(t)
 	rec, body := env.do("POST", "/api/notices", env.adminToken, model.CreateNoticeRequest{
