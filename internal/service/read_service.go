@@ -82,6 +82,9 @@ func (r *ReadService) recordRead(ctx context.Context, userID, noticeID string) e
 // 排序遵循 ResidentListOrder：置顶 -> 优先级 -> 发布时间倒序。
 func (r *ReadService) ListForResident(ctx context.Context, userID string, f model.NoticeFilter) ([]model.NoticeWithReadStatus, error) {
 	f.Status = model.StatusPublished
+	if f.Limit <= 0 || f.Limit > 500 {
+		f.Limit = 500
+	}
 	notices, err := r.store.ListNotices(ctx, f)
 	if err != nil {
 		return nil, err
