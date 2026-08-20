@@ -41,6 +41,9 @@ type Store interface {
 	ListNotices(ctx context.Context, f model.NoticeFilter) ([]model.Notice, error)
 	// UpdateNotice 更新通知。
 	UpdateNotice(ctx context.Context, n model.Notice) (model.Notice, error)
+	// SetNoticePinned 仅切换置顶位。不前移 UpdatedAt、不改变 PublishAt，
+	// 因此不会使已读记录失效（置顶是展示属性，不构成"内容更新"）。
+	SetNoticePinned(ctx context.Context, id string, pinned bool) (model.Notice, error)
 	// DeleteNotice 删除通知，并级联删除其阅读记录。
 	DeleteNotice(ctx context.Context, id string) error
 

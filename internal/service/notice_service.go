@@ -74,7 +74,13 @@ func (n *NoticeService) List(ctx context.Context, f model.NoticeFilter, viewer m
 	return n.store.ListNotices(ctx, f)
 }
 
-// Update 更新通知（仅管理员）。前移 UpdatedAt 使历史已读失效（"更新即未读"）。
+// Update 更新通知（仅管理员）。内容变更前移 UpdatedAt 使历史已读失效（"更新即未读"）。
+//
+// 置顶变更与内容变更分离：
+//   - 仅置顶变更走 store.SetNoticePinned，不前移 UpdatedAt，已读状态保持；
+//   - 任意内容字段（标题/正文/优先级/分类）真正变更走 store.UpdateNotice，前移 UpdatedAt
+//     使历史已读失效；二者同时变更时以内容更新为主（一并前移 UpdatedAt）。
+//   - 无任何实质变更返回当前通知，不前移 UpdatedAt。
 func (n *NoticeService) Update(ctx context.Context, id string, req model.UpdateNoticeRequest, editor model.User) (model.Notice, error) {
 	if !editor.IsAdmin() {
 		return model.Notice{}, model.ErrForbidden
@@ -83,8 +89,8 @@ func (n *NoticeService) Update(ctx context.Context, id string, req model.UpdateN
 	if err != nil {
 		return model.Notice{}, err
 	}
-	// 应用变更。
-	changed := false
+	// contentChanged：内容类字段（标题/正文/优先级/分类）是否真正变更。
+	contentChanged := false
 	if req.Title != nil {
 		t := strings.TrimSpace(*req.Title)
 		if utf8.RuneCountInString(t) < 1 || utf8.RuneCountInString(t) > 200 {
@@ -92,7 +98,7 @@ func (n *NoticeService) Update(ctx context.Context, id string, req model.UpdateN
 		}
 		if t != notice.Title {
 			notice.Title = t
-			changed = true
+			contentChanged = true
 		}
 	}
 	if req.Content != nil {
@@ -102,7 +108,7 @@ func (n *NoticeService) Update(ctx context.Context, id string, req model.UpdateN
 		}
 		if c != notice.Content {
 			notice.Content = c
-			changed = true
+			contentChanged = true
 		}
 	}
 	if req.Priority != nil {
@@ -111,13 +117,7 @@ func (n *NoticeService) Update(ctx context.Context, id string, req model.UpdateN
 		}
 		if *req.Priority != notice.Priority {
 			notice.Priority = *req.Priority
-			changed = true
-		}
-	}
-	if req.Pinned != nil {
-		if *req.Pinned != notice.Pinned {
-			notice.Pinned = *req.Pinned
-			changed = true
+			contentChanged = true
 		}
 	}
 	if req.Category != nil {
@@ -127,15 +127,26 @@ func (n *NoticeService) Update(ctx context.Context, id string, req model.UpdateN
 		}
 		if c != notice.Category {
 			notice.Category = c
-			changed = true
+			contentChanged = true
 		}
 	}
-	if !changed {
-		// 无任何字段，返回当前（不前移 UpdatedAt，避免无意义使已读失效）。
-		return notice, nil
+	// pinnedChanged：置顶位是否真正变更（独立于内容）。
+	pinnedChanged := false
+	if req.Pinned != nil && *req.Pinned != notice.Pinned {
+		notice.Pinned = *req.Pinned
+		pinnedChanged = true
 	}
-	// UpdateNotice 在 store 内会前移 UpdatedAt。
-	return n.store.UpdateNotice(ctx, notice)
+
+	if contentChanged {
+		// 内容变更：store.UpdateNotice 前移 UpdatedAt（携带新的 Pinned）。
+		return n.store.UpdateNotice(ctx, notice)
+	}
+	if pinnedChanged {
+		// 仅置顶变更：不前移 UpdatedAt，已读状态保持。
+		return n.store.SetNoticePinned(ctx, id, notice.Pinned)
+	}
+	// 无实质变更：返回当前（不前移 UpdatedAt，避免无意义使已读失效）。
+	return notice, nil
 }
 
 // Delete 删除通知（仅管理员）。store 内级联清理阅读记录。
@@ -185,7 +196,10 @@ func (n *NoticeService) Unpublish(ctx context.Context, id string, caller model.U
 	return n.store.UpdateNotice(ctx, notice)
 }
 
-// TogglePin 切换置顶状态。
+// TogglePin 切换置顶状态（仅管理员）。
+//
+// 置顶是展示属性，只影响列表排序，不构成内容更新：经此路径置顶
+// 不前移 UpdatedAt，因此不会让已读居民重新变为未读。
 func (n *NoticeService) TogglePin(ctx context.Context, id string, caller model.User) (model.Notice, error) {
 	if !caller.IsAdmin() {
 		return model.Notice{}, model.ErrForbidden
@@ -194,8 +208,7 @@ func (n *NoticeService) TogglePin(ctx context.Context, id string, caller model.U
 	if err != nil {
 		return model.Notice{}, err
 	}
-	notice.Pinned = !notice.Pinned
-	return n.store.UpdateNotice(ctx, notice)
+	return n.store.SetNoticePinned(ctx, id, !notice.Pinned)
 }
 
 // now 注入时钟。

@@ -295,6 +295,28 @@ func (s *MemoryStore) UpdateNotice(ctx context.Context, n model.Notice) (model.N
 	return n, nil
 }
 
+// SetNoticePinned 仅切换置顶位。
+//
+// 与 UpdateNotice 的关键区别：不前移 UpdatedAt、不改变 PublishAt 等其他字段。
+// 置顶是展示属性而非内容更新，不应让已读居民重新变为未读
+// （ReadAt >= UpdatedAt 的判定保持不变）。
+func (s *MemoryStore) SetNoticePinned(ctx context.Context, id string, pinned bool) (model.Notice, error) {
+	if err := ctx.Err(); err != nil {
+		return model.Notice{}, err
+	}
+	s.mu.Lock()
+	cur, ok := s.notices[id]
+	if !ok {
+		s.mu.Unlock()
+		return model.Notice{}, model.ErrNotFound
+	}
+	// 仅改 Pinned，保留 CreatedAt/UpdatedAt/PublishAt 等其余字段。
+	cur.Pinned = pinned
+	s.notices[id] = cur
+	s.mu.Unlock()
+	s.afterWrite()
+	return cur, nil
+}
 
 func (s *MemoryStore) DeleteNotice(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {

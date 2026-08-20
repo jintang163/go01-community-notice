@@ -110,6 +110,85 @@ func TestPinningReadNoticeKeepsItRead(t *testing.T) {
 	if !read { t.Fatal("pinning should not make an unchanged notice unread") }
 }
 
+// TestPinningViaUpdateKeepsItRead 置顶同样可经 PUT {pinned} 完成：
+// 该路径也不应让未改动内容的已读居民变未读，且不应前移 UpdatedAt。
+func TestPinningViaUpdateKeepsItRead(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	n := env.createPublishedNotice(t, "停电提醒")
+	if err := env.svc.Read.MarkRead(ctx, env.resident.ID, n.ID); err != nil {
+		t.Fatalf("mark read: %v", err)
+	}
+	before := n.UpdatedAt
+	env.clock.Advance(time.Minute)
+
+	pin := true
+	updated, err := env.svc.Notice.Update(ctx, n.ID, model.UpdateNoticeRequest{Pinned: &pin}, env.admin)
+	if err != nil {
+		t.Fatalf("pin via update: %v", err)
+	}
+	if !updated.Pinned {
+		t.Fatal("expected pinned")
+	}
+	if !updated.UpdatedAt.Equal(before) {
+		t.Errorf("pinning via update advanced UpdatedAt: before=%s after=%s", before, updated.UpdatedAt)
+	}
+	if read, err := env.svc.Read.IsRead(ctx, env.resident.ID, n.ID); err != nil {
+		t.Fatalf("read status after pin: %v", err)
+	} else if !read {
+		t.Fatal("pinning via update should not make an unchanged notice unread")
+	}
+
+	// 取消置顶同样只改展示属性，不应使已读失效。
+	env.clock.Advance(time.Minute)
+	unpin := false
+	updated, err = env.svc.Notice.Update(ctx, n.ID, model.UpdateNoticeRequest{Pinned: &unpin}, env.admin)
+	if err != nil {
+		t.Fatalf("unpin via update: %v", err)
+	}
+	if updated.Pinned {
+		t.Fatal("expected unpinned")
+	}
+	if !updated.UpdatedAt.Equal(before) {
+		t.Errorf("unpinning via update advanced UpdatedAt: before=%s after=%s", before, updated.UpdatedAt)
+	}
+	if read, err := env.svc.Read.IsRead(ctx, env.resident.ID, n.ID); err != nil {
+		t.Fatalf("read status after unpin: %v", err)
+	} else if !read {
+		t.Fatal("unpinning via update should not make an unchanged notice unread")
+	}
+}
+
+// TestUpdatePinnedWithContentAdvancesUpdatedAt 内容变更与置顶同时提交时，
+// 以内容更新为主：前移 UpdatedAt 使已读失效（保留正常"更新即未读"语义）。
+func TestUpdatePinnedWithContentAdvancesUpdatedAt(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	n := env.createPublishedNotice(t, "停气提醒")
+	if err := env.svc.Read.MarkRead(ctx, env.resident.ID, n.ID); err != nil {
+		t.Fatalf("mark read: %v", err)
+	}
+	before := n.UpdatedAt
+	env.clock.Advance(time.Minute)
+
+	pin, newTitle := true, "停气紧急提醒"
+	updated, err := env.svc.Notice.Update(ctx, n.ID, model.UpdateNoticeRequest{Pinned: &pin, Title: &newTitle}, env.admin)
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if !updated.Pinned || updated.Title != "停气紧急提醒" {
+		t.Fatalf("expected pinned and retitled, got pinned=%v title=%q", updated.Pinned, updated.Title)
+	}
+	if !updated.UpdatedAt.After(before) {
+		t.Fatal("content change should advance UpdatedAt")
+	}
+	if read, err := env.svc.Read.IsRead(ctx, env.resident.ID, n.ID); err != nil {
+		t.Fatalf("read status: %v", err)
+	} else if read {
+		t.Fatal("content change should invalidate prior read")
+	}
+}
+
 func TestNoticeTogglePin(t *testing.T) {
 	env := newTestEnv(t)
 	ctx := context.Background()
