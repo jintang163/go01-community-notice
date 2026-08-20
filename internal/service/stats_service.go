@@ -99,10 +99,16 @@ func (s *StatsService) startOfToday() time.Time {
 }
 
 // NoticeByID 单条通知阅读统计。
+//
+// 草稿未对居民发布，不存在已读/未读状态，故其居民阅读统计不可用：
+// 视同"未找到"（与居民侧"草稿不可见"语义一致）。
 func (s *StatsService) NoticeByID(ctx context.Context, noticeID string) (model.NoticeStats, error) {
 	notice, err := s.store.GetNotice(ctx, noticeID)
 	if err != nil {
 		return model.NoticeStats{}, err
+	}
+	if notice.IsDraft() {
+		return model.NoticeStats{}, model.ErrNotFound
 	}
 	residents, err := s.store.ListUsers(ctx, model.RoleResident)
 	if err != nil {

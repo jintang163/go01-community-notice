@@ -89,6 +89,56 @@ func TestStatsNoticeAfterUpdate(t *testing.T) {
 	}
 }
 
+// TestStatsNoticeByIDDraftUnavailable 草稿未对居民发布，不存在居民阅读统计。
+func TestStatsNoticeByIDDraftUnavailable(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	// 草稿（默认 status 为 draft）。
+	d, err := env.svc.Notice.Create(ctx, model.NoticeInput{
+		Title: "待确认的停水安排", Content: "尚未对居民发布",
+	}, env.admin)
+	if err != nil {
+		t.Fatalf("create draft: %v", err)
+	}
+	if _, err := env.svc.Stats.NoticeByID(ctx, d.ID); !model.IsNotFound(err) {
+		t.Fatalf("expected not found for draft stats, got %v", err)
+	}
+}
+
+// TestStatsNoticeByIDAfterPublishUnpublish 同一通知发布后可用、下架回草稿后不可用。
+func TestStatsNoticeByIDAfterPublishUnpublish(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	d, err := env.svc.Notice.Create(ctx, model.NoticeInput{
+		Title: "待发布通知", Content: "内容",
+	}, env.admin)
+	if err != nil {
+		t.Fatalf("create draft: %v", err)
+	}
+	if _, err := env.svc.Stats.NoticeByID(ctx, d.ID); !model.IsNotFound(err) {
+		t.Fatalf("draft stats should be unavailable, got %v", err)
+	}
+	// 发布后统计可用。
+	published, err := env.svc.Notice.Publish(ctx, d.ID, env.admin)
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	stats, err := env.svc.Stats.NoticeByID(ctx, published.ID)
+	if err != nil {
+		t.Fatalf("published stats: %v", err)
+	}
+	if stats.ResidentTotal != 1 || stats.ReadCount != 0 || stats.UnreadCount != 1 {
+		t.Errorf("published stats unexpected: %+v", stats)
+	}
+	// 下架回草稿后再次不可用。
+	if _, err := env.svc.Notice.Unpublish(ctx, published.ID, env.admin); err != nil {
+		t.Fatalf("unpublish: %v", err)
+	}
+	if _, err := env.svc.Stats.NoticeByID(ctx, published.ID); !model.IsNotFound(err) {
+		t.Fatalf("unpublished stats should be unavailable, got %v", err)
+	}
+}
+
 func TestStatsGlobalReportsReadAggregationFailure(t *testing.T) {
 	env := newTestEnv(t)
 	ctx := context.Background()
