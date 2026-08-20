@@ -7,7 +7,24 @@ import (
 	"time"
 
 	"go01-community-notice/internal/model"
+	"go01-community-notice/internal/store"
 )
+
+type delayedMetadataStore struct {
+	store.Store
+	updateStarted chan struct{}
+	allowUpdate   chan struct{}
+}
+
+func (s *delayedMetadataStore) UpdateNoticeMetadata(ctx context.Context, notice model.Notice) (model.Notice, error) {
+	close(s.updateStarted)
+	select {
+	case <-s.allowUpdate:
+		return s.Store.UpdateNoticeMetadata(ctx, notice)
+	case <-ctx.Done():
+		return model.Notice{}, ctx.Err()
+	}
+}
 
 func TestNoticeCreateAcceptsBoundaryLengthLocalizedText(t *testing.T) {
 	env := newTestEnv(t)
@@ -175,6 +192,46 @@ func TestNoticeUpdateSameValuesKeepsResidentReadState(t *testing.T) {
 	}
 	if !read {
 		t.Fatal("resident became unread after a same-value update")
+	}
+}
+
+func TestConcurrentNoticeChangesPreserveBothResults(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	notice := env.createPublishedNotice(t, "社区活动安排")
+
+	controlledStore := &delayedMetadataStore{
+		Store:         env.store,
+		updateStarted: make(chan struct{}),
+		allowUpdate:   make(chan struct{}),
+	}
+	controlledService := NewNoticeService(controlledStore, env.clock)
+
+	toggleResult := make(chan error, 1)
+	go func() {
+		_, err := controlledService.TogglePin(ctx, notice.ID, env.admin)
+		toggleResult <- err
+	}()
+
+	<-controlledStore.updateStarted
+	updatedContent := "活动时间调整为本周六下午三点"
+	if _, err := env.svc.Notice.Update(ctx, notice.ID, model.UpdateNoticeRequest{Content: &updatedContent}, env.admin); err != nil {
+		t.Fatalf("update content: %v", err)
+	}
+	close(controlledStore.allowUpdate)
+	if err := <-toggleResult; err != nil {
+		t.Fatalf("toggle pin: %v", err)
+	}
+
+	stored, err := env.store.GetNotice(ctx, notice.ID)
+	if err != nil {
+		t.Fatalf("get notice: %v", err)
+	}
+	if !stored.Pinned {
+		t.Fatal("expected notice to remain pinned")
+	}
+	if stored.Content != updatedContent {
+		t.Fatalf("concurrent content update was lost: got %q, want %q", stored.Content, updatedContent)
 	}
 }
 
