@@ -82,45 +82,56 @@ func (n *NoticeService) Update(ctx context.Context, id string, req model.UpdateN
 	if err != nil {
 		return model.Notice{}, err
 	}
-	// 应用变更。
+	// 应用变更。仅当值真正变化时才标记 changed，否则相同值更新会前移
+	// UpdatedAt，无意义地使居民已读失效（"无实质变更即保持已读"）。
 	changed := false
 	if req.Title != nil {
 		t := strings.TrimSpace(*req.Title)
 		if t == "" {
 			return model.Notice{}, model.ErrInvalidTitle
 		}
-		notice.Title = t
-		changed = true
+		if notice.Title != t {
+			notice.Title = t
+			changed = true
+		}
 	}
 	if req.Content != nil {
 		c := strings.TrimSpace(*req.Content)
 		if c == "" {
 			return model.Notice{}, model.ErrInvalidContent
 		}
-		notice.Content = c
-		changed = true
+		if notice.Content != c {
+			notice.Content = c
+			changed = true
+		}
 	}
 	if req.Priority != nil {
 		if *req.Priority < 0 || *req.Priority > 999 {
 			return model.Notice{}, model.ErrInvalidPriority
 		}
-		notice.Priority = *req.Priority
-		changed = true
+		if notice.Priority != *req.Priority {
+			notice.Priority = *req.Priority
+			changed = true
+		}
 	}
 	if req.Pinned != nil {
-		notice.Pinned = *req.Pinned
-		changed = true
+		if notice.Pinned != *req.Pinned {
+			notice.Pinned = *req.Pinned
+			changed = true
+		}
 	}
 	if req.Category != nil {
 		c := strings.TrimSpace(*req.Category)
 		if len(c) > 32 {
 			return model.Notice{}, model.ErrInvalidCategory
 		}
-		notice.Category = c
-		changed = true
+		if notice.Category != c {
+			notice.Category = c
+			changed = true
+		}
 	}
 	if !changed {
-		// 无任何字段，返回当前（不前移 UpdatedAt，避免无意义使已读失效）。
+		// 无实质变更，返回当前（不前移 UpdatedAt，避免无意义使已读失效）。
 		return notice, nil
 	}
 	// UpdateNotice 在 store 内会前移 UpdatedAt。
