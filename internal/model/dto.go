@@ -10,16 +10,8 @@ type LoginRequest struct {
 
 // LoginResponse 登录响应。
 type LoginResponse struct {
-	Token string           `json:"token"`
-	User  AuthUserResponse `json:"user"`
-}
-
-// NewLoginResponse 构造仅包含公开用户资料的登录响应。
-func NewLoginResponse(token string, user User) LoginResponse {
-	return LoginResponse{
-		Token: token,
-		User:  AuthUserResponse{}.FromUser(user),
-	}
+	Token string `json:"token"`
+	User  User   `json:"user"`
 }
 
 // AuthUserResponse 当前登录用户响应（脱敏）。
