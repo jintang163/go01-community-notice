@@ -41,6 +41,7 @@ type Store interface {
 	ListNotices(ctx context.Context, f model.NoticeFilter) ([]model.Notice, error)
 	// UpdateNotice 更新通知。
 	UpdateNotice(ctx context.Context, n model.Notice) (model.Notice, error)
+	UpdateNoticeMetadata(ctx context.Context, n model.Notice) (model.Notice, error)
 	// DeleteNotice 删除通知，并级联删除其阅读记录。
 	DeleteNotice(ctx context.Context, id string) error
 

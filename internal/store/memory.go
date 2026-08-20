@@ -295,7 +295,6 @@ func (s *MemoryStore) UpdateNotice(ctx context.Context, n model.Notice) (model.N
 	return n, nil
 }
 
-
 func (s *MemoryStore) DeleteNotice(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -316,6 +315,21 @@ func (s *MemoryStore) DeleteNotice(ctx context.Context, id string) error {
 	s.mu.Unlock()
 	s.afterWrite()
 	return nil
+}
+
+// UpdateNoticeMetadata updates non-content metadata without invalidating reads.
+func (s *MemoryStore) UpdateNoticeMetadata(ctx context.Context, n model.Notice) (model.Notice, error) {
+	if err := ctx.Err(); err != nil { return model.Notice{}, err }
+	s.mu.Lock()
+	cur, ok := s.notices[n.ID]
+	if !ok { s.mu.Unlock(); return model.Notice{}, model.ErrNotFound }
+	n.CreatedAt = cur.CreatedAt
+	n.UpdatedAt = cur.UpdatedAt
+	n.PublishAt = cur.PublishAt
+	s.notices[n.ID] = n
+	s.mu.Unlock()
+	s.afterWrite()
+	return n, nil
 }
 
 // ---- 阅读记录 ----

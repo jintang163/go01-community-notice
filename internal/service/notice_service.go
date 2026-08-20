@@ -195,7 +195,7 @@ func (n *NoticeService) TogglePin(ctx context.Context, id string, caller model.U
 		return model.Notice{}, err
 	}
 	notice.Pinned = !notice.Pinned
-	return n.store.UpdateNotice(ctx, notice)
+	return n.store.UpdateNoticeMetadata(ctx, notice)
 }
 
 // now 注入时钟。
