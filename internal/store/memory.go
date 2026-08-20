@@ -317,19 +317,26 @@ func (s *MemoryStore) DeleteNotice(ctx context.Context, id string) error {
 	return nil
 }
 
-// UpdateNoticeMetadata updates non-content metadata without invalidating reads.
+// UpdateNoticeMetadata updates non-content metadata (置顶) without invalidating reads.
+//
+// 只把调用方传入的置顶变更（Pinned）应用到当前存储的通知，其余字段
+// （标题/正文/优先级/分类/作者/状态/CreatedAt/UpdatedAt/PublishAt）一律保留
+// 当前值。置顶是展示属性，不应前移 UpdatedAt、不应使已读失效。
+//
+// 关键：在写锁内重新读取当前通知再合并，而非直接写入调用方（可能在并发更新
+// 之前）读到的整条通知。否则当另一位管理员并发更新正文时，置顶操作会用陈旧
+// 正文覆盖对方刚保存的结果（"更新丢失"）。这里只取 Pinned，正文等内容字段
+// 始终取自当前存储值，从而与并发的正文更新互不覆盖。
 func (s *MemoryStore) UpdateNoticeMetadata(ctx context.Context, n model.Notice) (model.Notice, error) {
 	if err := ctx.Err(); err != nil { return model.Notice{}, err }
 	s.mu.Lock()
 	cur, ok := s.notices[n.ID]
 	if !ok { s.mu.Unlock(); return model.Notice{}, model.ErrNotFound }
-	n.CreatedAt = cur.CreatedAt
-	n.UpdatedAt = cur.UpdatedAt
-	n.PublishAt = cur.PublishAt
-	s.notices[n.ID] = n
+	cur.Pinned = n.Pinned // 仅应用置顶变更，保留当前正文等内容字段
+	s.notices[n.ID] = cur
 	s.mu.Unlock()
 	s.afterWrite()
-	return n, nil
+	return cur, nil
 }
 
 // ---- 阅读记录 ----
