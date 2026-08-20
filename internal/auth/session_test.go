@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -108,3 +109,44 @@ func TestSessionUniqueTokens(t *testing.T) {
 		t.Error("expected unique tokens")
 	}
 }
+
+// TestSessionRevokeUser 覆盖删除用户的会话语义：
+//   - 撤销前已建立的会话立即失效（被清理）；
+//   - 撤销后为该用户 Create 必须失败（ErrUserRevoked），不产生 token。
+//
+// 这覆盖了"登录在删除前发起、删除后才执行到建会话"的竞态：账号一旦删除，
+// 前序登录不能再建立有效会话。
+func TestSessionRevokeUser(t *testing.T) {
+	sm := NewSessionManager(time.Hour)
+	u := model.User{ID: "u1", Username: "a", Role: model.RoleResident}
+
+	// 删除前已有会话：撤销时一并清理。
+	existing, err := sm.Create(u)
+	if err != nil {
+		t.Fatalf("create existing: %v", err)
+	}
+	if n := sm.RevokeUser(u.ID); n != 1 {
+		t.Errorf("expected 1 invalidated on revoke, got %d", n)
+	}
+	if _, err := sm.Get(existing); err == nil {
+		t.Error("pre-revoke session should be invalidated")
+	}
+
+	// 撤销后再建会话：必须被拒绝，不返回 token。
+	token, err := sm.Create(u)
+	if !errors.Is(err, ErrUserRevoked) {
+		t.Fatalf("expected ErrUserRevoked after revoke, got %v", err)
+	}
+	if token != "" {
+		t.Errorf("expected no token for revoked user, got %q", token)
+	}
+}
+
+// TestSessionRevokeUserEmpty 空用户 ID 不应崩溃也不计数。
+func TestSessionRevokeUserEmpty(t *testing.T) {
+	sm := NewSessionManager(time.Hour)
+	if n := sm.RevokeUser(""); n != 0 {
+		t.Errorf("expected 0 for empty id, got %d", n)
+	}
+}
+
