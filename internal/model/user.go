@@ -30,15 +30,22 @@ func (r UserRole) IsValid() bool {
 // 口令不存储明文，而是保存盐值与迭代后的哈希（见 internal/auth.PasswordHasher）。
 // ID 由 store 层在创建时统一生成并回填到返回值。
 type User struct {
-	ID           string    `json:"id"`
-	Username     string    `json:"username"`
-	PasswordHash string    `json:"password_hash"`
-	PasswordSalt string    `json:"password_salt"`
-	Iterations   int       `json:"iterations"`
-	Role         UserRole  `json:"role"`
-	DisplayName  string    `json:"display_name"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           string `json:"id"`
+	Username     string `json:"username"`
+	PasswordHash string `json:"password_hash"`
+	PasswordSalt string `json:"password_salt"`
+	Iterations   int    `json:"iterations"`
+	// CredentialVersion 凭据版本（口令版本号）。每次修改口令时自增。
+	// 与 SessionManager 内的会话颁发版本对照：Login 读取用户时随快照一起取得
+	// 该版本，Create 在持锁阶段与当前版本比较，不符则拒绝建会话。这样"改密前
+	// 发起、改密后才执行到 Create"的旧口令登录携带的是改密前的版本，与已自增
+	// 的当前版本不符而被拒绝；而改密后用新口令发起的登录读到的是新版本，可正常
+	// 建立会话。
+	CredentialVersion uint64    `json:"credential_version"`
+	Role              UserRole  `json:"role"`
+	DisplayName       string    `json:"display_name"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // IsAdmin 是否管理员。
@@ -49,10 +56,10 @@ func (u User) IsResident() bool { return u.Role == RoleResident }
 
 // UserInput 创建用户的输入参数，供服务层校验。
 type UserInput struct {
-	Username    string    `json:"username"`
-	Password    string    `json:"password"`
-	Role        UserRole  `json:"role"`
-	DisplayName string    `json:"display_name"`
+	Username    string   `json:"username"`
+	Password    string   `json:"password"`
+	Role        UserRole `json:"role"`
+	DisplayName string   `json:"display_name"`
 }
 
 // Validate 校验创建用户输入。返回领域错误，错误 Code 用于 HTTP 层映射状态码。
