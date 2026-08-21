@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -41,6 +42,12 @@ func (a *AuthService) Login(ctx context.Context, username, password string) (str
 	}
 	token, err := a.sessions.Create(u)
 	if err != nil {
+		// Create 仅在用户已被撤销（删除）时返回 ErrUserRevoked：
+		// 该登录在删除前发起、删除后才执行到建会话，账号已不存在，
+		// 不能再建立会话——对外按凭据无效处理（401），不泄露删除时序。
+		if errors.Is(err, auth.ErrUserRevoked) {
+			return "", model.User{}, model.ErrInvalidCredentials
+		}
 		return "", model.User{}, err
 	}
 	return token, u, nil
@@ -98,8 +105,10 @@ func (a *AuthService) DeleteUser(ctx context.Context, id string, caller model.Us
 	if err := a.store.DeleteUser(ctx, id); err != nil {
 		return err
 	}
-	// 使其所有会话失效。
-	a.sessions.InvalidateByUser(target.ID)
+	// 撤销用户：使其现存会话失效，并阻止删除后才创建的会话。
+	// 用 RevokeUser 而非 InvalidateByUser——后者只清理现存会话，无法阻止
+	// 删除前发起、删除后才执行到 Create 的登录请求建立新会话。
+	a.sessions.RevokeUser(target.ID)
 	return nil
 }
 
