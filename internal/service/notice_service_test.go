@@ -22,17 +22,17 @@ type delayedPublishStore struct {
 	allowPublish   chan struct{}
 }
 
-func (s *delayedPublishStore) UpdateNotice(ctx context.Context, notice model.Notice) (model.Notice, error) {
-	if notice.IsPublished() {
+func (s *delayedPublishStore) SetNoticeStatus(ctx context.Context, id string, status model.NoticeStatus) (model.Notice, error) {
+	if status == model.StatusPublished {
 		close(s.publishStarted)
 		select {
 		case <-s.allowPublish:
-			return s.Store.UpdateNotice(ctx, notice)
+			return s.Store.SetNoticeStatus(ctx, id, status)
 		case <-ctx.Done():
 			return model.Notice{}, ctx.Err()
 		}
 	}
-	return s.Store.UpdateNotice(ctx, notice)
+	return s.Store.SetNoticeStatus(ctx, id, status)
 }
 
 func (s *delayedMetadataStore) UpdateNoticeMetadata(ctx context.Context, notice model.Notice) (model.Notice, error) {
