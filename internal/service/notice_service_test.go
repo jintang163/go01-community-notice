@@ -16,6 +16,25 @@ type delayedMetadataStore struct {
 	allowUpdate   chan struct{}
 }
 
+type delayedPublishStore struct {
+	store.Store
+	publishStarted chan struct{}
+	allowPublish   chan struct{}
+}
+
+func (s *delayedPublishStore) UpdateNotice(ctx context.Context, notice model.Notice) (model.Notice, error) {
+	if notice.IsPublished() {
+		close(s.publishStarted)
+		select {
+		case <-s.allowPublish:
+			return s.Store.UpdateNotice(ctx, notice)
+		case <-ctx.Done():
+			return model.Notice{}, ctx.Err()
+		}
+	}
+	return s.Store.UpdateNotice(ctx, notice)
+}
+
 func (s *delayedMetadataStore) UpdateNoticeMetadata(ctx context.Context, notice model.Notice) (model.Notice, error) {
 	close(s.updateStarted)
 	select {
@@ -229,6 +248,52 @@ func TestConcurrentNoticeChangesPreserveBothResults(t *testing.T) {
 	}
 	if !stored.Pinned {
 		t.Fatal("expected notice to remain pinned")
+	}
+	if stored.Content != updatedContent {
+		t.Fatalf("concurrent content update was lost: got %q, want %q", stored.Content, updatedContent)
+	}
+}
+
+func TestConcurrentPublishAndEditPreserveBothResults(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	draft, err := env.svc.Notice.Create(ctx, model.NoticeInput{
+		Title: "社区活动安排", Content: "活动时间待定",
+	}, env.admin)
+	if err != nil {
+		t.Fatalf("create draft: %v", err)
+	}
+
+	controlledStore := &delayedPublishStore{
+		Store:          env.store,
+		publishStarted: make(chan struct{}),
+		allowPublish:   make(chan struct{}),
+	}
+	publishService := NewNoticeService(controlledStore, env.clock)
+	publishResult := make(chan error, 1)
+	go func() {
+		_, err := publishService.Publish(ctx, draft.ID, env.admin)
+		publishResult <- err
+	}()
+
+	<-controlledStore.publishStarted
+	updatedContent := "活动时间调整为本周六下午三点"
+	if _, err := env.svc.Notice.Update(ctx, draft.ID, model.UpdateNoticeRequest{
+		Content: &updatedContent,
+	}, env.admin); err != nil {
+		t.Fatalf("update content: %v", err)
+	}
+	close(controlledStore.allowPublish)
+	if err := <-publishResult; err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	stored, err := env.store.GetNotice(ctx, draft.ID)
+	if err != nil {
+		t.Fatalf("get notice: %v", err)
+	}
+	if !stored.IsPublished() {
+		t.Fatal("expected notice to remain published")
 	}
 	if stored.Content != updatedContent {
 		t.Fatalf("concurrent content update was lost: got %q, want %q", stored.Content, updatedContent)
