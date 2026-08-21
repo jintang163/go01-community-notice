@@ -17,6 +17,34 @@ type pausedLoginStore struct {
 	once     sync.Once
 }
 
+type concurrentPasswordStore struct {
+	store.Store
+	userID string
+	loaded chan struct{}
+	resume chan struct{}
+	mu     sync.Mutex
+	count  int
+}
+
+func (s *concurrentPasswordStore) GetUserByID(ctx context.Context, id string) (model.User, error) {
+	u, err := s.Store.GetUserByID(ctx, id)
+	if err != nil || id != s.userID {
+		return u, err
+	}
+	s.mu.Lock()
+	s.count++
+	if s.count == 2 {
+		close(s.loaded)
+	}
+	s.mu.Unlock()
+	select {
+	case <-s.resume:
+		return u, nil
+	case <-ctx.Done():
+		return model.User{}, ctx.Err()
+	}
+}
+
 func (s *pausedLoginStore) GetUserByUsername(ctx context.Context, username string) (model.User, error) {
 	u, err := s.Store.GetUserByUsername(ctx, username)
 	if err != nil || username != s.username {
@@ -100,6 +128,53 @@ func TestPasswordChangeRejectsPendingLoginWithOldPassword(t *testing.T) {
 		if _, err := authService.SessionByToken(login.token); err == nil {
 			t.Fatal("a login using the old password created a valid session after the password change completed")
 		}
+	}
+}
+
+func TestConcurrentPasswordChangesLeaveLatestPasswordUsable(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	gate := &concurrentPasswordStore{
+		Store:  env.store,
+		userID: env.resident.ID,
+		loaded: make(chan struct{}),
+		resume: make(chan struct{}),
+	}
+	authService := NewAuthService(gate, env.hasher, env.sessions, env.clock)
+
+	passwords := []string{"newpass-one", "newpass-two"}
+	results := make(chan error, len(passwords))
+	for _, password := range passwords {
+		password := password
+		go func() {
+			results <- authService.ChangePassword(ctx, env.resident.ID, "res123", password)
+		}()
+	}
+
+	<-gate.loaded
+	close(gate.resume)
+	for range passwords {
+		if err := <-results; err != nil {
+			t.Fatalf("concurrent password change: %v", err)
+		}
+	}
+
+	stored, err := env.store.GetUserByID(ctx, env.resident.ID)
+	if err != nil {
+		t.Fatalf("get updated resident: %v", err)
+	}
+	winningPassword := ""
+	for _, password := range passwords {
+		if env.hasher.Verify(password, stored.PasswordSalt, stored.PasswordHash, stored.Iterations) {
+			winningPassword = password
+			break
+		}
+	}
+	if winningPassword == "" {
+		t.Fatal("neither successful password change matches the persisted credentials")
+	}
+	if _, _, err := authService.Login(ctx, env.resident.Username, winningPassword); err != nil {
+		t.Fatalf("the latest successfully persisted password must remain usable, got %v", err)
 	}
 }
 
