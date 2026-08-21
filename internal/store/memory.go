@@ -419,7 +419,19 @@ func (s *MemoryStore) UpsertReadRecord(ctx context.Context, rr model.ReadRecord)
 		s.mu.Unlock()
 		return model.ReadRecord{}, model.ErrNotFound
 	}
-	if _, ok := s.notices[rr.NoticeID]; !ok {
+	notice, ok := s.notices[rr.NoticeID]
+	if !ok {
+		s.mu.Unlock()
+		return model.ReadRecord{}, model.ErrNotFound
+	}
+	// 下架（转草稿）与本次阅读记录写入并发时，不能让尚未落库的阅读记录写到
+	// 草稿上：居民打开详情时通知尚为已发布，但服务层判定之后、本写入之前，管理员
+	// 可能已完成下架。此处与 SetNoticeStatus 共用同一把写锁，故在写锁内重新读取
+	// 当前通知状态——若已下架为草稿则拒绝写入并返回 ErrNotFound（与草稿不可见、
+	// 草稿不可标记已读的语义一致），写锁使该检查与随后的写入原子，消除
+	// "服务层判定已发布 -> 写入前被并发下架"的窗口。已删除通知在上面的存在性
+	// 检查中同样返回 ErrNotFound。
+	if !notice.IsPublished() {
 		s.mu.Unlock()
 		return model.ReadRecord{}, model.ErrNotFound
 	}

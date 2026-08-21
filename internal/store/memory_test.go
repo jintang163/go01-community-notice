@@ -189,6 +189,37 @@ func TestUpsertReadRecordIdempotent(t *testing.T) {
 	}
 }
 
+// TestUpsertReadRecordRejectsDraftNotice 草稿通知不应产生居民阅读记录。
+// 即使通知曾为已发布、在阅读记录写入前被并发下架，store 也必须在写锁内
+// 重新读取当前状态并拒绝写入（bug-11）。
+func TestUpsertReadRecordRejectsDraftNotice(t *testing.T) {
+	s, _, _ := newTestStore()
+	ctx := context.Background()
+	admin := mustCreateUser(t, s, "admin", model.RoleAdmin)
+	res := mustCreateUser(t, s, "res1", model.RoleResident)
+
+	// 草稿通知：直接 upsert 应被拒绝。
+	draft, _ := s.CreateNotice(ctx, model.Notice{Title: "d", Content: "c", Status: model.StatusDraft, AuthorID: admin.ID})
+	if _, err := s.UpsertReadRecord(ctx, model.ReadRecord{UserID: res.ID, NoticeID: draft.ID}); !model.IsNotFound(err) {
+		t.Fatalf("expected not found upserting read on draft, got %v", err)
+	}
+	if c, _ := s.CountReadRecordsByNotice(ctx, draft.ID); c != 0 {
+		t.Fatalf("expected 0 reads on draft, got %d", c)
+	}
+
+	// 发布后再下架：upsert 同样应被拒绝，且不留阅读记录。
+	pub, _ := s.CreateNotice(ctx, model.Notice{Title: "p", Content: "c", Status: model.StatusPublished, AuthorID: admin.ID})
+	if _, err := s.SetNoticeStatus(ctx, pub.ID, model.StatusDraft); err != nil {
+		t.Fatalf("unpublish: %v", err)
+	}
+	if _, err := s.UpsertReadRecord(ctx, model.ReadRecord{UserID: res.ID, NoticeID: pub.ID}); !model.IsNotFound(err) {
+		t.Fatalf("expected not found upserting read on unpublished notice, got %v", err)
+	}
+	if c, _ := s.CountReadRecordsByNotice(ctx, pub.ID); c != 0 {
+		t.Fatalf("expected 0 reads on unpublished notice, got %d", c)
+	}
+}
+
 func TestListNoticeOrdering(t *testing.T) {
 	s, fc, _ := newTestStore()
 	ctx := context.Background()
