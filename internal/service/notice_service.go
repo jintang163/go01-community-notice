@@ -162,10 +162,11 @@ func (n *NoticeService) Publish(ctx context.Context, id string, caller model.Use
 	if notice.IsPublished() {
 		return model.Notice{}, model.ErrConflict
 	}
-	notice.Status = model.StatusPublished
-	// 发布前移 UpdatedAt（同时设置 PublishAt）——保证已读基准从发布时刻起算。
-	// store.UpdateNotice 会设置 PublishAt = UpdatedAt。
-	return n.store.UpdateNotice(ctx, notice)
+	// 用 SetNoticeStatus 而非 UpdateNotice：发布是状态转换，store 在写锁内
+	// 重新读取当前通知再切换状态，保留并发保存的正文等内容字段，避免用发布前
+	// 读到的旧通知整条覆盖另一位管理员刚保存的编辑（"更新丢失"）。
+	// 冲突校验仍以预读状态为准（重复发布返回 409）。
+	return n.store.SetNoticeStatus(ctx, id, model.StatusPublished)
 }
 
 // Unpublish 下架通知（已发布 -> 草稿）。
@@ -180,9 +181,8 @@ func (n *NoticeService) Unpublish(ctx context.Context, id string, caller model.U
 	if notice.IsDraft() {
 		return model.Notice{}, model.ErrConflict
 	}
-	notice.Status = model.StatusDraft
-	notice.PublishAt = nil
-	return n.store.UpdateNotice(ctx, notice)
+	// 同 Publish：状态转换经 SetNoticeStatus，保留并发编辑，不整条覆盖。
+	return n.store.SetNoticeStatus(ctx, id, model.StatusDraft)
 }
 
 // TogglePin 切换置顶状态。

@@ -339,6 +339,45 @@ func (s *MemoryStore) UpdateNoticeMetadata(ctx context.Context, n model.Notice) 
 	return cur, nil
 }
 
+// SetNoticeStatus 转换通知状态（发布/下架），保留并发的内容编辑。
+//
+// 与 UpdateNoticeMetadata 同属"只改特定字段"的读-改-写：在写锁内重新读取当前
+// 通知，仅切换 Status 并按状态调整 PublishAt 与 UpdatedAt，正文/标题/优先级/
+// 分类/作者/置顶/CreatedAt 一律保留当前存储值。这样当一位管理员在另一位管理员
+// 并发编辑正文期间发布/下架通知时，不会用发布前读到的旧正文覆盖刚保存的新正文
+// （"更新丢失"）。
+//
+// 发布时前移 UpdatedAt 并设置 PublishAt = UpdatedAt，使"更新即未读"基准从发布
+// 时刻起算，与 UpdateNotice 处理发布状态的语义一致；下架时清空 PublishAt。
+func (s *MemoryStore) SetNoticeStatus(ctx context.Context, id string, status model.NoticeStatus) (model.Notice, error) {
+	if err := ctx.Err(); err != nil {
+		return model.Notice{}, err
+	}
+	if status == "" {
+		status = model.StatusDraft
+	}
+	s.mu.Lock()
+	cur, ok := s.notices[id]
+	if !ok {
+		s.mu.Unlock()
+		return model.Notice{}, model.ErrNotFound
+	}
+	cur.Status = status
+	cur.UpdatedAt = s.now() // 前移 UpdatedAt —— "更新即未读"的基准
+	if cur.IsPublished() {
+		// 发布：确保有发布时刻，且以本次转换为基准。
+		pa := cur.UpdatedAt
+		cur.PublishAt = &pa
+	} else {
+		// 下架：清空发布时刻。
+		cur.PublishAt = nil
+	}
+	s.notices[id] = cur
+	s.mu.Unlock()
+	s.afterWrite()
+	return cur, nil
+}
+
 // ---- 阅读记录 ----
 
 func (s *MemoryStore) UpsertReadRecord(ctx context.Context, rr model.ReadRecord) (model.ReadRecord, error) {

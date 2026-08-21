@@ -41,7 +41,16 @@ type Store interface {
 	ListNotices(ctx context.Context, f model.NoticeFilter) ([]model.Notice, error)
 	// UpdateNotice 更新通知。
 	UpdateNotice(ctx context.Context, n model.Notice) (model.Notice, error)
+	// UpdateNoticeMetadata 更新非内容元数据（置顶）。
 	UpdateNoticeMetadata(ctx context.Context, n model.Notice) (model.Notice, error)
+	// SetNoticeStatus 转换通知状态（发布/下架）。
+	//
+	// 仅在写锁内把目标状态（及发布时刻）应用到当前存储的通知，其余字段
+	// （标题/正文/优先级/分类/作者/置顶/CreatedAt）一律保留当前值。发布/下架
+	// 是状态转换，不应回写调用方在并发更新之前读到的整条通知，否则会覆盖
+	// 另一位管理员并发保存的正文编辑（"更新丢失"）。状态转换前移 UpdatedAt
+	// 以触发"更新即未读"，与 UpdateNotice 的语义一致。
+	SetNoticeStatus(ctx context.Context, id string, status model.NoticeStatus) (model.Notice, error)
 	// DeleteNotice 删除通知，并级联删除其阅读记录。
 	DeleteNotice(ctx context.Context, id string) error
 
