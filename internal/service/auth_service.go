@@ -42,10 +42,13 @@ func (a *AuthService) Login(ctx context.Context, username, password string) (str
 	}
 	token, err := a.sessions.Create(u)
 	if err != nil {
-		// Create 仅在用户已被撤销（删除）时返回 ErrUserRevoked：
-		// 该登录在删除前发起、删除后才执行到建会话，账号已不存在，
-		// 不能再建立会话——对外按凭据无效处理（401），不泄露删除时序。
-		if errors.Is(err, auth.ErrUserRevoked) {
+		// Create 在两种竞态下拒绝建会话，均对外映射为凭据无效（401），
+		// 不泄露账号/口令的变更时序：
+		//   - ErrUserRevoked：登录在删除前发起、删除后才执行到建会话，
+		//     账号已不存在，不能再建立会话。
+		//   - ErrCredentialsRotated：旧口令登录在改密前发起、改密后才执行
+		//     到建会话，其携带的凭据版本已与当前版本不符，旧口令不能再建会话。
+		if errors.Is(err, auth.ErrUserRevoked) || errors.Is(err, auth.ErrCredentialsRotated) {
 			return "", model.User{}, model.ErrInvalidCredentials
 		}
 		return "", model.User{}, err
@@ -77,11 +80,11 @@ func (a *AuthService) CreateUser(ctx context.Context, in model.UserInput, creato
 	}
 	u, err := a.store.CreateUser(ctx, model.User{
 		Username:     in.Username,
-		PasswordHash:  hash,
-		PasswordSalt:  salt,
-		Iterations:    iterations,
-		Role:          in.Role,
-		DisplayName:   in.DisplayName,
+		PasswordHash: hash,
+		PasswordSalt: salt,
+		Iterations:   iterations,
+		Role:         in.Role,
+		DisplayName:  in.DisplayName,
 	})
 	if err != nil {
 		return model.User{}, err
@@ -139,10 +142,15 @@ func (a *AuthService) ChangePassword(ctx context.Context, userID, oldPassword, n
 	u.PasswordSalt = salt
 	u.PasswordHash = hash
 	u.Iterations = iterations
+	u.CredentialVersion++ // 前移凭据版本，使旧口令登录携带的旧版本失效
 	if _, err := a.store.UpdateUser(ctx, u); err != nil {
 		return err
 	}
-	a.sessions.InvalidateByUser(userID)
+	// 旋转凭据：前移会话颁发版本并清理现存会话。用 RotateCredentials 而非
+	// InvalidateByUser——后者只清理改密瞬间已存在的会话，无法阻止改密前发起、
+	// 改密后才执行到 Create 的旧口令登录建立新会话（其携带改密前的凭据版本，
+	// 与此处前移后的当前版本不符才被 Create 拒绝）。
+	a.sessions.RotateCredentials(userID)
 	return nil
 }
 

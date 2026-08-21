@@ -35,6 +35,17 @@ var ErrInvalidToken = errors.New("invalid or expired token")
 // 从而避免为已删除账号建立有效会话。
 var ErrUserRevoked = errors.New("user revoked")
 
+// ErrCredentialsRotated 口令已变更：发起登录时使用的凭据版本与建会话时
+// 的当前版本不符，拒绝建立会话。
+//
+// 修改口令后，ChangePassword 通过 RotateCredentials 前移用户的会话颁发版本
+// 并清理现存会话。此后即便某个登录请求是在改密前发起（携旧凭据版本）、改密后
+// 才执行到 Create，也会因版本不符而被拒绝，从而避免旧口令登录在口令变更完成
+// 后再建立有效会话。与 ErrUserRevoked 的区别：改密后用户仍可凭新口令登录，
+// 版本只是前移而非永久撤销，故 ErrCredentialsRotated 对外映射为凭据无效
+// （401），与旧口令失效的语义一致。
+var ErrCredentialsRotated = errors.New("credentials rotated")
+
 // SessionManager 内存会话管理器。
 //
 // Token 为 crypto/rand 生成的高熵随机串。会话存在 map 中，带过期时间。
@@ -43,10 +54,18 @@ var ErrUserRevoked = errors.New("user revoked")
 //
 // revoked 记录已被撤销的用户 ID（删除用户时写入）。Create 会拒绝为已撤销用户
 // 建立会话，确保删除前未完成的登录请求不会再产生有效 token。
+//
+// versions 记录每个用户的会话颁发版本（修改口令时由 RotateCredentials
+// 前移）。Create 在持锁阶段把请求所携带的 CredentialVersion 与
+// versions[userID] 比较：相符才建会话，不符则返回 ErrCredentialsRotated。
+// 这拦截了"改密前发起、改密后才执行到 Create"的旧口令登录——它在改密前读取
+// 用户快照、携旧版本，改密后 Create 时版本已前移、不符而被拒；而改密后凭新
+// 口令发起的登录读到新版本，相符可正常建会话。
 type SessionManager struct {
 	mu       sync.RWMutex
 	sessions map[string]Session
 	revoked  map[string]struct{}
+	versions map[string]uint64
 	now      func() time.Time
 	tokenTTL time.Duration
 }
@@ -59,6 +78,7 @@ func NewSessionManager(tokenTTL time.Duration) *SessionManager {
 	return &SessionManager{
 		sessions: make(map[string]Session),
 		revoked:  make(map[string]struct{}),
+		versions: make(map[string]uint64),
 		now:      time.Now,
 		tokenTTL: tokenTTL,
 	}
@@ -78,6 +98,12 @@ func generateToken() (string, error) {
 // 若用户已被撤销（RevokeUser），返回 ErrUserRevoked 而不建立会话。这覆盖了
 // 删除前已发起、删除后才执行到此处的前序登录请求——账号一旦删除，此前任何
 // 尚未完成的登录都不能再建立有效会话。
+//
+// 若请求携带的凭据版本 u.CredentialVersion 与当前会话颁发版本不符（见
+// RotateCredentials），返回 ErrCredentialsRotated 而不建立会话。这覆盖了
+// 改密前已发起、改密后才执行到此处的前序旧口令登录——它在改密前读取用户快照、
+// 携旧版本，改密后建会话时版本已前移、不符而被拒；而改密后凭新口令发起的登录
+// 读到的是新版本，相符可正常建会话。
 func (sm *SessionManager) Create(u model.User) (string, error) {
 	token, err := generateToken()
 	if err != nil {
@@ -97,9 +123,39 @@ func (sm *SessionManager) Create(u model.User) (string, error) {
 		sm.mu.Unlock()
 		return "", ErrUserRevoked
 	}
+	if cur, ok := sm.versions[u.ID]; ok && cur != u.CredentialVersion {
+		sm.mu.Unlock()
+		return "", ErrCredentialsRotated
+	}
 	sm.sessions[token] = sess
 	sm.mu.Unlock()
 	return token, nil
+}
+
+// RotateCredentials 前移用户的会话颁发版本，并使其所有现存会话立即失效。
+//
+// 修改口令时调用。前移后的版本使此后任何携带旧版本的 Create（即改密前发起、
+// 改密后才到达 Create 的旧口令登录）返回 ErrCredentialsRotated；同时清理改密
+// 瞬间已存在的会话。返回失效的会话数。
+//
+// 与 RevokeUser 的区别：后者永久撤销（用户已删除、不能再登录）；RotateCredentials
+// 仅前移版本——改密后用户仍可凭新口令登录（其登录读到的是更新后用户实体的
+// 新 CredentialVersion，与版本表相符），故用于口令变更场景。
+func (sm *SessionManager) RotateCredentials(userID string) int {
+	if userID == "" {
+		return 0
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.versions[userID]++
+	count := 0
+	for k, s := range sm.sessions {
+		if s.UserID == userID {
+			delete(sm.sessions, k)
+			count++
+		}
+	}
+	return count
 }
 
 // RevokeUser 撤销用户：标记其 ID 为已撤销，并使其所有现存会话立即失效。
