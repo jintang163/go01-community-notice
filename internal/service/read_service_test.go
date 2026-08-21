@@ -279,6 +279,52 @@ func TestConcurrentUnpublishAndViewLeaveNoDraftReadState(t *testing.T) {
 	}
 }
 
+func TestConcurrentUpdateAndViewKeepChangedNoticeUnread(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	n := env.createPublishedNotice(t, "社区活动时间")
+	controlledStore := &delayedReadWriteStore{
+		Store:        env.store,
+		writeStarted: make(chan struct{}),
+		allowWrite:   make(chan struct{}),
+	}
+	readService := NewReadService(controlledStore, env.clock)
+
+	type viewResult struct {
+		notice model.Notice
+		err    error
+	}
+	result := make(chan viewResult, 1)
+	go func() {
+		notice, err := readService.ViewDetail(ctx, n.ID, env.resident)
+		result <- viewResult{notice: notice, err: err}
+	}()
+
+	<-controlledStore.writeStarted
+	env.clock.Advance(time.Minute)
+	updatedContent := "活动时间调整为本周日下午四点"
+	if _, err := env.svc.Notice.Update(ctx, n.ID, model.UpdateNoticeRequest{Content: &updatedContent}, env.admin); err != nil {
+		close(controlledStore.allowWrite)
+		t.Fatalf("update while detail view is pending: %v", err)
+	}
+	close(controlledStore.allowWrite)
+	viewed := <-result
+	if viewed.err != nil {
+		t.Fatalf("view detail: %v", viewed.err)
+	}
+	if viewed.notice.Content == updatedContent {
+		t.Fatal("test did not preserve the pre-update detail snapshot")
+	}
+
+	read, err := env.svc.Read.IsRead(ctx, env.resident.ID, n.ID)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if read {
+		t.Fatal("viewing the old snapshot must not mark the concurrently updated notice as read")
+	}
+}
+
 // TestDraftInvisibleToResident 草稿对居民不可见（404）。
 func TestDraftInvisibleToResident(t *testing.T) {
 	env := newTestEnv(t)
