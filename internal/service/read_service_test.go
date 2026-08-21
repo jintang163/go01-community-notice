@@ -41,6 +41,22 @@ type failingReadStore struct {
 	err error
 }
 
+type delayedReadWriteStore struct {
+	store.Store
+	writeStarted chan struct{}
+	allowWrite   chan struct{}
+}
+
+func (s *delayedReadWriteStore) UpsertReadRecord(ctx context.Context, rr model.ReadRecord) (model.ReadRecord, error) {
+	close(s.writeStarted)
+	select {
+	case <-s.allowWrite:
+		return s.Store.UpsertReadRecord(ctx, rr)
+	case <-ctx.Done():
+		return model.ReadRecord{}, ctx.Err()
+	}
+}
+
 func (s failingReadStore) UpsertReadRecord(context.Context, model.ReadRecord) (model.ReadRecord, error) {
 	return model.ReadRecord{}, s.err
 }
@@ -223,6 +239,43 @@ func TestViewDetailReportsReadPersistenceFailure(t *testing.T) {
 	svc := NewReadService(failing, env.clock)
 	if _, err := svc.ViewDetail(context.Background(), n.ID, env.resident); err == nil {
 		t.Fatal("expected detail view to report read persistence failure")
+	}
+}
+
+func TestConcurrentUnpublishAndViewLeaveNoDraftReadState(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	n := env.createPublishedNotice(t, "临时活动通知")
+	controlledStore := &delayedReadWriteStore{
+		Store:        env.store,
+		writeStarted: make(chan struct{}),
+		allowWrite:   make(chan struct{}),
+	}
+	readService := NewReadService(controlledStore, env.clock)
+
+	viewResult := make(chan error, 1)
+	go func() {
+		_, err := readService.ViewDetail(ctx, n.ID, env.resident)
+		viewResult <- err
+	}()
+
+	<-controlledStore.writeStarted
+	if _, err := env.svc.Notice.Unpublish(ctx, n.ID, env.admin); err != nil {
+		close(controlledStore.allowWrite)
+		t.Fatalf("unpublish while detail view is pending: %v", err)
+	}
+	close(controlledStore.allowWrite)
+	<-viewResult
+
+	stored, err := env.store.GetNotice(ctx, n.ID)
+	if err != nil {
+		t.Fatalf("get notice after unpublish: %v", err)
+	}
+	if !stored.IsDraft() {
+		t.Fatalf("expected notice to be draft, got %s", stored.Status)
+	}
+	if _, err := env.store.GetReadRecord(ctx, env.resident.ID, n.ID); !model.IsNotFound(err) {
+		t.Fatalf("a draft notice must not retain resident read state, got %v", err)
 	}
 }
 
