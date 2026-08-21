@@ -67,6 +67,42 @@ func TestDeletedUserCannotFinishPendingLogin(t *testing.T) {
 	}
 }
 
+func TestPasswordChangeRejectsPendingLoginWithOldPassword(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	gate := &pausedLoginStore{
+		Store:    env.store,
+		username: env.resident.Username,
+		loaded:   make(chan struct{}),
+		resume:   make(chan struct{}),
+	}
+	authService := NewAuthService(gate, env.hasher, env.sessions, env.clock)
+
+	type loginResult struct {
+		token string
+		err   error
+	}
+	result := make(chan loginResult, 1)
+	go func() {
+		token, _, err := authService.Login(ctx, env.resident.Username, "res123")
+		result <- loginResult{token: token, err: err}
+	}()
+
+	<-gate.loaded
+	if err := authService.ChangePassword(ctx, env.resident.ID, "res123", "newpass123"); err != nil {
+		close(gate.resume)
+		t.Fatalf("change password while old-password login is pending: %v", err)
+	}
+	close(gate.resume)
+
+	login := <-result
+	if login.err == nil {
+		if _, err := authService.SessionByToken(login.token); err == nil {
+			t.Fatal("a login using the old password created a valid session after the password change completed")
+		}
+	}
+}
+
 func TestAuthLoginSuccess(t *testing.T) {
 	env := newTestEnv(t)
 	token, u, err := env.svc.Auth.Login(context.Background(), "admin", "admin123")
