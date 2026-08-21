@@ -139,11 +139,18 @@ func (a *AuthService) ChangePassword(ctx context.Context, userID, oldPassword, n
 	if err != nil {
 		return err
 	}
-	u.PasswordSalt = salt
-	u.PasswordHash = hash
-	u.Iterations = iterations
-	u.CredentialVersion++ // 前移凭据版本，使旧口令登录携带的旧版本失效
-	if _, err := a.store.UpdateUser(ctx, u); err != nil {
+	// 凭据版本的"落盘自增"与"会话颁发版本的前移"必须同源且各自从当前值自增，
+	// 否则并发改密会让二者各从陈旧基线自增、最终不一致——落盘的新口令读到的
+	// 凭据版本与会话颁发版本不符，被 Create 以 ErrCredentialsRotated 拒绝，
+	// 账号被永久锁在登录流程外。
+	//
+	// 这里用 SetUserPassword 而非 UpdateUser：UpdateUser 整条覆盖，会把调用方在
+	// 并发更新前读到的（可能陈旧的）CredentialVersion 自增后写回，两位居民并发
+	// 改密时各自从同一陈旧基线自增、都写入同一版本（"更新丢失"）。SetUserPassword
+	// 在写锁内重新读取当前用户再自增，从当前存储值推进，与会话颁发版本在
+	// RotateCredentials 内从当前 map 值自增保持同源。两者各自在自身锁下从当前值
+	// 自增，故并发改密时均单调推进、始终一致。
+	if _, err := a.store.SetUserPassword(ctx, userID, salt, hash, iterations); err != nil {
 		return err
 	}
 	// 旋转凭据：前移会话颁发版本并清理现存会话。用 RotateCredentials 而非

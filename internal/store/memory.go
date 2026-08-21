@@ -165,6 +165,35 @@ func (s *MemoryStore) UpdateUser(ctx context.Context, u model.User) (model.User,
 	return u, nil
 }
 
+// SetUserPassword 更新用户口令并自增凭据版本。
+//
+// 在写锁内重新读取当前用户，仅写入新的盐/哈希/迭代次数并从当前存储值自增
+// CredentialVersion，保留 ID/用户名/角色/显示名/CreatedAt。凭据版本的自增
+// 必须在写锁内从当前值进行，而非用调用方在并发更新前读到的可能陈旧值自增——
+// 否则两位居民并发改密时各自从同一陈旧基线自增、最终都写入同一版本（"更新
+// 丢失"），落盘的凭据版本与会话颁发版本（RotateCredentials 在各自锁内从当前
+// 值自增）不一致，最终落盘的新口令在 Login 时读到旧版本被 Create 拒绝。
+func (s *MemoryStore) SetUserPassword(ctx context.Context, userID, salt, hash string, iterations int) (model.User, error) {
+	if err := ctx.Err(); err != nil {
+		return model.User{}, err
+	}
+	s.mu.Lock()
+	cur, ok := s.users[userID]
+	if !ok {
+		s.mu.Unlock()
+		return model.User{}, model.ErrNotFound
+	}
+	cur.PasswordSalt = salt
+	cur.PasswordHash = hash
+	cur.Iterations = iterations
+	cur.CredentialVersion++ // 从当前存储值自增，不取调用方传入的可能陈旧版本
+	cur.UpdatedAt = s.now()
+	s.users[userID] = cur
+	s.mu.Unlock()
+	s.afterWrite()
+	return cur, nil
+}
+
 func (s *MemoryStore) DeleteUser(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
