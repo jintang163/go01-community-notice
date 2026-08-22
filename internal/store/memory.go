@@ -20,15 +20,15 @@ type IDGenerator func(prefix string) string
 type MemoryStore struct {
 	mu sync.RWMutex
 
-	users    map[string]model.User    // id -> user
-	username map[string]string        // username -> id（唯一索引）
-	notices  map[string]model.Notice  // id -> notice
-	reads    map[string]model.ReadRecord // id -> read record
+	users    map[string]model.User              // id -> user
+	username map[string]string                  // username -> id（唯一索引）
+	notices  map[string]model.Notice            // id -> notice
+	reads    map[string]model.ReadRecord        // id -> read record
 	readIdx  map[model.ReadKey]model.ReadRecord // (userID,noticeID) -> read record
 
-	now  func() time.Time
-	genID IDGenerator
-	persistHook func() // 写后持久化回调（由 FileStore 注入）
+	now         func() time.Time
+	genID       IDGenerator
+	persistHook func() error // 写后持久化回调（由 FileStore 注入）
 }
 
 // NewMemoryStore 创建内存存储。
@@ -54,17 +54,18 @@ func NewMemoryStore(now func() time.Time, genID IDGenerator) *MemoryStore {
 }
 
 // SetPersistHook 设置写后持久化回调。FileStore 用它把内存快照落盘。
-func (s *MemoryStore) SetPersistHook(hook func()) {
+func (s *MemoryStore) SetPersistHook(hook func() error) {
 	s.mu.Lock()
 	s.persistHook = hook
 	s.mu.Unlock()
 }
 
 // afterWrite 在写锁释放后安全地触发持久化。
-func (s *MemoryStore) afterWrite() {
+func (s *MemoryStore) afterWrite() error {
 	if s.persistHook != nil {
-		s.persistHook()
+		return s.persistHook()
 	}
+	return nil
 }
 
 // ---- 用户 ----
@@ -87,7 +88,9 @@ func (s *MemoryStore) CreateUser(ctx context.Context, u model.User) (model.User,
 	s.users[u.ID] = u
 	s.username[u.Username] = u.ID
 	s.mu.Unlock()
-	s.afterWrite()
+	if err := s.afterWrite(); err != nil {
+		return model.User{}, err
+	}
 	return u, nil
 }
 
@@ -161,7 +164,9 @@ func (s *MemoryStore) UpdateUser(ctx context.Context, u model.User) (model.User,
 	u.UpdatedAt = s.now()
 	s.users[u.ID] = u
 	s.mu.Unlock()
-	s.afterWrite()
+	if err := s.afterWrite(); err != nil {
+		return model.User{}, err
+	}
 	return u, nil
 }
 
@@ -185,8 +190,7 @@ func (s *MemoryStore) DeleteUser(ctx context.Context, id string) error {
 		}
 	}
 	s.mu.Unlock()
-	s.afterWrite()
-	return nil
+	return s.afterWrite()
 }
 
 // ---- 通知 ----
@@ -212,7 +216,9 @@ func (s *MemoryStore) CreateNotice(ctx context.Context, n model.Notice) (model.N
 	}
 	s.notices[n.ID] = n
 	s.mu.Unlock()
-	s.afterWrite()
+	if err := s.afterWrite(); err != nil {
+		return model.Notice{}, err
+	}
 	return n, nil
 }
 
@@ -291,7 +297,9 @@ func (s *MemoryStore) UpdateNotice(ctx context.Context, n model.Notice) (model.N
 	}
 	s.notices[n.ID] = n
 	s.mu.Unlock()
-	s.afterWrite()
+	if err := s.afterWrite(); err != nil {
+		return model.Notice{}, err
+	}
 	return n, nil
 }
 
@@ -313,22 +321,28 @@ func (s *MemoryStore) DeleteNotice(ctx context.Context, id string) error {
 		}
 	}
 	s.mu.Unlock()
-	s.afterWrite()
-	return nil
+	return s.afterWrite()
 }
 
 // UpdateNoticeMetadata updates non-content metadata without invalidating reads.
 func (s *MemoryStore) UpdateNoticeMetadata(ctx context.Context, n model.Notice) (model.Notice, error) {
-	if err := ctx.Err(); err != nil { return model.Notice{}, err }
+	if err := ctx.Err(); err != nil {
+		return model.Notice{}, err
+	}
 	s.mu.Lock()
 	cur, ok := s.notices[n.ID]
-	if !ok { s.mu.Unlock(); return model.Notice{}, model.ErrNotFound }
+	if !ok {
+		s.mu.Unlock()
+		return model.Notice{}, model.ErrNotFound
+	}
 	n.CreatedAt = cur.CreatedAt
 	n.UpdatedAt = cur.UpdatedAt
 	n.PublishAt = cur.PublishAt
 	s.notices[n.ID] = n
 	s.mu.Unlock()
-	s.afterWrite()
+	if err := s.afterWrite(); err != nil {
+		return model.Notice{}, err
+	}
 	return n, nil
 }
 
@@ -356,7 +370,9 @@ func (s *MemoryStore) UpsertReadRecord(ctx context.Context, rr model.ReadRecord)
 		s.reads[rr.ID] = rr
 		s.readIdx[key] = rr
 		s.mu.Unlock()
-		s.afterWrite()
+		if err := s.afterWrite(); err != nil {
+			return model.ReadRecord{}, err
+		}
 		return rr, nil
 	}
 	rr.ID = s.genID(model.ReadIDPrefix)
@@ -365,7 +381,9 @@ func (s *MemoryStore) UpsertReadRecord(ctx context.Context, rr model.ReadRecord)
 	s.reads[rr.ID] = rr
 	s.readIdx[key] = rr
 	s.mu.Unlock()
-	s.afterWrite()
+	if err := s.afterWrite(); err != nil {
+		return model.ReadRecord{}, err
+	}
 	return rr, nil
 }
 
@@ -427,8 +445,7 @@ func (s *MemoryStore) DeleteReadRecordsByNotice(ctx context.Context, noticeID st
 		}
 	}
 	s.mu.Unlock()
-	s.afterWrite()
-	return nil
+	return s.afterWrite()
 }
 
 func (s *MemoryStore) DeleteReadRecordsByUser(ctx context.Context, userID string) error {
@@ -443,8 +460,7 @@ func (s *MemoryStore) DeleteReadRecordsByUser(ctx context.Context, userID string
 		}
 	}
 	s.mu.Unlock()
-	s.afterWrite()
-	return nil
+	return s.afterWrite()
 }
 
 // AllUsers 返回全部用户副本（仅供 FileStore 快照用）。

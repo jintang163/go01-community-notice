@@ -17,7 +17,7 @@ func TestFileStorePersistence(t *testing.T) {
 	fc := newFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	gen := &seqIDGen{}
 	mem := NewMemoryStore(fc.Now, gen.next)
-	mem.SetPersistHook(func() {})
+	mem.SetPersistHook(func() error { return nil })
 
 	// 用内存实现直接构造数据。
 	ctx := context.Background()

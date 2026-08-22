@@ -39,11 +39,21 @@ func (a *AuthService) Login(ctx context.Context, username, password string) (str
 	if !a.hasher.Verify(password, u.PasswordSalt, u.PasswordHash, u.Iterations) {
 		return "", model.User{}, model.ErrInvalidCredentials
 	}
-	token, err := a.sessions.Create(u)
+	current, err := a.store.GetUserByID(ctx, u.ID)
+	if err != nil {
+		if model.IsNotFound(err) {
+			return "", model.User{}, model.ErrInvalidCredentials
+		}
+		return "", model.User{}, err
+	}
+	if current.Username != u.Username || current.PasswordSalt != u.PasswordSalt || current.PasswordHash != u.PasswordHash || current.Iterations != u.Iterations {
+		return "", model.User{}, model.ErrInvalidCredentials
+	}
+	token, err := a.sessions.Create(current)
 	if err != nil {
 		return "", model.User{}, err
 	}
-	return token, u, nil
+	return token, current, nil
 }
 
 // Logout 使会话失效。
@@ -70,11 +80,11 @@ func (a *AuthService) CreateUser(ctx context.Context, in model.UserInput, creato
 	}
 	u, err := a.store.CreateUser(ctx, model.User{
 		Username:     in.Username,
-		PasswordHash:  hash,
-		PasswordSalt:  salt,
-		Iterations:    iterations,
-		Role:          in.Role,
-		DisplayName:   in.DisplayName,
+		PasswordHash: hash,
+		PasswordSalt: salt,
+		Iterations:   iterations,
+		Role:         in.Role,
+		DisplayName:  in.DisplayName,
 	})
 	if err != nil {
 		return model.User{}, err

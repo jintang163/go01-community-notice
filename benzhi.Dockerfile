@@ -7,7 +7,6 @@ ENV GOPROXY=https://goproxy.cn,direct
 
 # 先复制依赖文件并下载依赖（利用 Docker 缓存，也保证容器内离线可用）
 COPY go.mod ./
-COPY go.sum* ./
 RUN go mod download
 
 # 复制所有项目文件

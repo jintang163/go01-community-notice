@@ -17,7 +17,7 @@ import (
 // snapshotData 落盘的 JSON 快照结构。
 // 版本号字段便于后续升级时做数据迁移。
 type snapshotData struct {
-	Version int                 `json:"version"`
+	Version int                `json:"version"`
 	Users   []model.User       `json:"users"`
 	Notices []model.Notice     `json:"notices"`
 	Reads   []model.ReadRecord `json:"reads"`
@@ -71,7 +71,7 @@ func (fs *FileStore) load() error {
 }
 
 // save 将当前内存状态原子写入磁盘。由 MemoryStore 写后钩子调用。
-func (fs *FileStore) save() {
+func (fs *FileStore) save() error {
 	fs.saveMu.Lock()
 	defer fs.saveMu.Unlock()
 
@@ -82,11 +82,7 @@ func (fs *FileStore) save() {
 		Reads:   fs.mem.AllReads(),
 	}
 
-	if err := fs.writeAtomic(snap); err != nil {
-		// 持久化失败不应使业务请求失败（数据仍在内存中），
-		// 但需记录错误。这里用 stderr 输出，避免引入外部日志库。
-		fmt.Fprintf(os.Stderr, "store: persist failed: %v\n", err)
-	}
+	return fs.writeAtomic(snap)
 }
 
 // writeAtomic 原子写：先写临时文件，再 rename 覆盖目标文件。
